@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Casino Royale — Pygame Edition"""
+"""Joas Casino Royale — Pygame Edition"""
 
 import pygame, random, json, sys, math, struct
 from pathlib import Path

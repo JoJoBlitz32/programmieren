@@ -19,6 +19,16 @@ FPS   = 60
 SAVE_FILE      = Path.home() / ".casino_royale_pg.json"
 STARTING_COINS = 1_000
 
+PRESTIGE_THRESHOLD = 10_000
+PRESTIGE_BONUS     = 500   # extra starting coins per prestige level
+GHOST_NAMES = [
+    "HighRoller7","LuckyAce","CardShark","VegasDreamer",
+    "BetKing99","RiskyBiz","AllInAnna","SlotQueen",
+    "DealerMike","TheFish","Maverick","CoinMaster",
+]
+GHOST_GAMES = ["Slots","Blackjack","Roulette","Dice","Hi-Lo","Coin Flip",
+               "Poker","Baccarat","Scratch"]
+
 # ── Colors ────────────────────────────────────────────────────────────────────
 BG      = (12,  18,  30)
 FELT    = (22,  36,  54)
@@ -73,9 +83,13 @@ class SoundManager:
         self.master = 0.7
         self.sfx    = 1.0
         self.card_back = 0
+        self.ghost_players = True
+        self.music_on = True
+        self._music_ch = None
         self._snds  = {}
         try:
             self._build()
+            self._build_music()
         except Exception:
             pass          # no crash if mixer unavailable
         self._load()
@@ -166,6 +180,95 @@ class SoundManager:
             return (s(_ln[i],t)*0.55 + s(_ln[i]*0.5,t)*0.25) * math.sin(math.pi*lp) * (1-p*0.45) * 0.72
         self._snds["lose"] = _make_snd(_lose, 0.88)
 
+        # Chip – small bet (<50)
+        self._snds["chip_sm"] = _make_snd(
+            lambda t,p: (math.sin(2*math.pi*900*t)*0.5 + math.sin(2*math.pi*1800*t)*0.25)
+                        * math.exp(-t*22) * 0.6, 0.15)
+        # Chip – medium bet (50-500)
+        self._snds["chip_md"] = _make_snd(
+            lambda t,p: (math.sin(2*math.pi*650*t)*0.55 + math.sin(2*math.pi*1300*t)*0.30
+                         + math.sin(2*math.pi*325*t)*0.15) * math.exp(-t*16) * 0.7, 0.20)
+        # Chip – large bet (>500)
+        self._snds["chip_lg"] = _make_snd(
+            lambda t,p: (math.sin(2*math.pi*380*t)*0.6 + math.sin(2*math.pi*760*t)*0.25
+                         + math.sin(2*math.pi*190*t)*0.15) * math.exp(-t*10) * 0.75, 0.28)
+
+    def _build_music(self):
+        """Procedural jazz loop — walking bass + piano chord stabs (160 BPM swing, Am turnaround)."""
+        import struct as _st
+        sr = 44100; dur = 3.0; n = int(sr * dur)
+        p2 = 2 * math.pi
+        beat = 0.375   # 160 BPM — 8 beats fit exactly in 3 s
+
+        # Walking bass line (Am → Dm approach → G → E7 turnaround)
+        bass_hz = [110.0, 123.47, 130.81, 146.83,
+                   98.0,  110.0,  130.81, 164.81]
+
+        # Jazz chord voicings (Am7 × 2 → Dm7 × 2 → G7 × 2 → E7 × 2)
+        chord_hz = [
+            [220.0, 261.63, 329.63, 392.0],     # Am7
+            [220.0, 261.63, 329.63, 392.0],
+            [146.83, 174.61, 220.0,  293.66],   # Dm7
+            [146.83, 174.61, 220.0,  293.66],
+            [98.0,  196.0,  246.94, 293.66],    # G7
+            [98.0,  196.0,  246.94, 293.66],
+            [164.81, 207.65, 246.94, 329.63],   # E7
+            [164.81, 207.65, 246.94, 329.63],
+        ]
+
+        buf = []
+        for i in range(n):
+            t  = i / sr
+            bi = int(t / beat) % 8
+            dt = t - int(t / beat) * beat
+            v  = 0.0
+
+            # Electric bass — plucked with natural harmonics
+            fb   = bass_hz[bi]
+            envb = math.exp(-dt * 8.0) * (1.0 - math.exp(-dt * 120))
+            v += (math.sin(p2 * fb       * t) * 0.60
+                + math.sin(p2 * fb * 2   * t) * 0.22
+                + math.sin(p2 * fb * 3   * t) * 0.08) * envb * 0.68
+
+            # Piano chord stab — bright attack, medium decay
+            envc = math.exp(-dt * 2.8) * (1.0 - math.exp(-dt * 80))
+            for fc in chord_hz[bi]:
+                v += (math.sin(p2 * fc     * t) * 0.75
+                    + math.sin(p2 * fc * 2 * t) * 0.14) * envc * 0.050
+
+            # Swing ghost note — soft high ping at 2/3 of the beat
+            swing_off = dt - beat * 0.667
+            if 0.0 < swing_off < 0.022:
+                v += math.sin(p2 * 3200 * t) * math.exp(-swing_off * 220) * 0.10
+
+            buf.append(max(-32767, min(32767, int(v * 32767))))
+
+        self._snds["music"] = pygame.mixer.Sound(buffer=_st.pack(f"<{n}h", *buf))
+
+    def start_music(self):
+        """Start or stop background music based on self.music_on."""
+        if self._music_ch is not None:
+            try:
+                self._music_ch.stop()
+            except Exception:
+                pass
+            self._music_ch = None
+        if self.music_on and "music" in self._snds:
+            try:
+                snd = self._snds["music"]
+                snd.set_volume(max(0.0, min(1.0, self.master * 0.35)))
+                self._music_ch = snd.play(loops=-1)
+            except Exception:
+                pass
+
+    def play_chip(self, bet):
+        if bet < 50:
+            self.play("chip_sm")
+        elif bet < 500:
+            self.play("chip_md")
+        else:
+            self.play("chip_lg")
+
     # ── persistence ───────────────────────────────────────────────────────────
     def _load(self):
         try:
@@ -175,6 +278,8 @@ class SoundManager:
                 self.sfx       = float(d.get("sfx",    1.0))
                 self.card_back = int(d.get("card_back", 0))
                 self.card_back = max(0, min(len(CARD_BACK_STYLE_NAMES) - 1, self.card_back))
+                self.ghost_players = bool(d.get("ghost_players", True))
+                self.music_on      = bool(d.get("music_on", True))
         except Exception:
             pass
 
@@ -183,7 +288,9 @@ class SoundManager:
             self._SETTINGS.write_text(
                 json.dumps({"master": self.master,
                             "sfx": self.sfx,
-                            "card_back": self.card_back}, indent=2))
+                            "card_back": self.card_back,
+                            "ghost_players": self.ghost_players,
+                            "music_on": self.music_on}, indent=2))
         except Exception:
             pass
 
@@ -239,6 +346,9 @@ GAME_COLORS = {
     "dice":      (60,  130, 220),
     "hilo":      (150, 80,  220),
     "coinflip":  (210, 175, 0),
+    "poker":     (180, 60,  120),
+    "baccarat":  (60,  160, 180),
+    "scratch":   (80,  200, 80),
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -246,10 +356,15 @@ GAME_COLORS = {
 # ─────────────────────────────────────────────────────────────────────────────
 class Player:
     def __init__(self, name, coins=STARTING_COINS):
-        self.name  = name
-        self.coins = coins
+        self.name          = name
+        self.coins         = coins
         self.display_coins = float(coins)
-        self.stats = {"games":0,"won":0,"lost":0,"biggest_win":0,"sessions":0}
+        self.streak        = 0   # +N win streak / -N loss streak
+        self.loan          = 0   # 0 = no loan; positive = amount owed
+        self.stats = {"games":0,"won":0,"lost":0,"biggest_win":0,
+                       "sessions":0,"peak_coins":coins,"achievements":[],
+                       "history":[]}
+        self.prestige = 0
 
     def win(self, amount):
         self.coins += amount
@@ -257,28 +372,43 @@ class Player:
         self.stats["games"] += 1
         if amount > self.stats["biggest_win"]:
             self.stats["biggest_win"] = amount
+        if self.coins > self.stats["peak_coins"]:
+            self.stats["peak_coins"] = self.coins
 
     def lose(self, amount):
         self.coins -= amount
         self.stats["lost"]  += amount
         self.stats["games"] += 1
 
+    def record_history(self):
+        hist = self.stats.setdefault("history", [])
+        hist.append(self.coins)
+        if len(hist) > 200: hist[:] = hist[-200:]
+
     def push(self):
         self.stats["games"] += 1
 
+    def update_streak(self, won):
+        if won:
+            self.streak = self.streak + 1 if self.streak > 0 else 1
+        else:
+            self.streak = self.streak - 1 if self.streak < 0 else -1
+
     def update(self, dt):
         if self.display_coins != self.coins:
-            diff = self.coins - self.display_coins
+            diff      = self.coins - self.display_coins
             direction = 1 if diff > 0 else -1
-            speed = max(120.0, abs(diff) * 2.5)
-            step = min(abs(diff), speed * dt)
+            speed     = max(120.0, abs(diff) * 2.5)
+            step      = min(abs(diff), speed * dt)
             self.display_coins += direction * step
             if abs(self.coins - self.display_coins) < 0.5:
                 self.display_coins = float(self.coins)
 
     def save(self):
         SAVE_FILE.write_text(json.dumps(
-            {"name":self.name,"coins":self.coins,"stats":self.stats}, indent=2))
+            {"name":self.name,"coins":self.coins,"stats":self.stats,
+             "loan":self.loan,"streak":self.streak,
+             "prestige":self.prestige}, indent=2))
 
     @staticmethod
     def load():
@@ -287,7 +417,10 @@ class Player:
                 d = json.loads(SAVE_FILE.read_text())
                 p = Player(d["name"], d["coins"])
                 p.display_coins = float(d["coins"])
-                p.stats = {**p.stats, **d.get("stats",{})}
+                p.stats   = {**p.stats, **d.get("stats",{})}
+                p.loan    = d.get("loan", 0)
+                p.streak  = d.get("streak", 0)
+                p.prestige = d.get("prestige", 0)
                 return p
             except: pass
         return None
@@ -317,6 +450,17 @@ def top_bar(surf, title, player, back_btn):
     display_balance = int(round(player.display_coins))
     b = txt(F_MD, f"Balance:  {display_balance:,} c", LGRAY)
     surf.blit(b, b.get_rect(right=W-30, centery=40))
+    streak = getattr(player, 'streak', 0)
+    if abs(streak) >= 2:
+        col   = WINC if streak > 0 else LOSEC
+        label = f"WIN x{streak}" if streak > 0 else f"LOSS x{abs(streak)}"
+        bw2   = 88
+        sb    = pygame.Surface((bw2, 26), pygame.SRCALPHA)
+        pygame.draw.rect(sb, (*col, 50), (0, 0, bw2, 26), border_radius=6)
+        pygame.draw.rect(sb, (*col, 200), (0, 0, bw2, 26), 1, border_radius=6)
+        surf.blit(sb, (122, 27))
+        sl = F_SMB.render(label, True, col)
+        surf.blit(sl, sl.get_rect(centerx=122 + bw2//2, centery=40))
 
 def draw_card_back(surf, x, y, w, h, style=0):
     r = pygame.Rect(x, y, w, h)
@@ -352,27 +496,16 @@ def draw_card(surf, rank, suit, x, y, w=72, h=104, hidden=False):
     if hidden:
         draw_card_back(surf, x, y, w, h, getattr(SND, 'card_back', 0))
         return
-    # Card shadow
-    shd = pygame.Surface((w+8, h+8), pygame.SRCALPHA)
-    pygame.draw.rect(shd, (0, 0, 0, 100), (0, 0, w+8, h+8), border_radius=8)
-    surf.blit(shd, (x+2, y+2))
-    # Card body
-    pygame.draw.rect(surf, (252, 252, 250), r, border_radius=8)
-    pygame.draw.rect(surf, (200, 200, 195), r, 2, border_radius=8)
-    # Card edge highlight
-    pygame.draw.line(surf, (255, 255, 255, 120), (x+4, y+4), (x+w-4, y+4), 1)
-    
+    pygame.draw.rect(surf, CREAM, r, border_radius=8)
+    pygame.draw.rect(surf, LGRAY, r, 1, border_radius=8)
     color = RED if suit in RED_S else BLACK
     sym   = SUIT_SYM[suit]
-    # Top-left corner
     rl = F_SMB.render(rank, True, color)
     sl = F_XS.render(sym,  True, color)
     surf.blit(rl, (x+4, y+3))
     surf.blit(sl, (x+4, y+3+rl.get_height()))
-    # Center symbol - larger
     cs = F_LG.render(sym, True, color)
     surf.blit(cs, cs.get_rect(centerx=x+w//2, centery=y+h//2))
-    # Bottom-right corner - inverted
     rr = F_SMB.render(rank, True, color)
     sr = F_XS.render(sym,  True, color)
     surf.blit(rr, (x+w-4-rr.get_width(), y+h-3-rr.get_height()-sr.get_height()))
@@ -409,27 +542,16 @@ def draw_glow(surf, cx, cy, color, radii=None):
         surf.blit(s, (cx-r, cy-r))
 
 def draw_felt_bg(surf):
-    """Modern casino table background with improved depth and styling."""
-    surf.fill(BG)
-    # Radial glow rings for depth
-    ring = pygame.Surface((W, H), pygame.SRCALPHA)
-    pygame.draw.circle(ring, (100, 220, 255, 30), (W//2, H//2), 500)
-    pygame.draw.circle(ring, (100, 220, 255, 15), (W//2, H//2), 380)
-    pygame.draw.circle(ring, (255, 255, 255, 8), (W//2, H//2), 280)
-    surf.blit(ring, (0, 0))
-    # Table rails with better styling
-    rails = pygame.Rect(40, 80, W-80, H-140)
-    pygame.draw.rect(surf, (25, 80, 120), rails, border_radius=26)
-    pygame.draw.rect(surf, (40, 100, 140), rails, 3, border_radius=26)
-    pygame.draw.rect(surf, (50, 120, 160), rails.inflate(-12, -12), 2, border_radius=22)
-    # Inner felt area with subtle texture
-    felt_area = rails.inflate(-40, -40)
-    pygame.draw.rect(surf, (30, 110, 60), felt_area, border_radius=20)
-    # Subtle scanlines for texture
-    for y in range(felt_area.top, felt_area.bottom, 8):
-        pygame.draw.line(surf, (255, 255, 255, 3), (felt_area.left, y), (felt_area.right, y), 1)
-    # Edge highlights
-    pygame.draw.rect(surf, (255, 255, 255, 15), felt_area, 1, border_radius=20)
+    """Classic casino felt table with wooden oval rail."""
+    surf.fill((10, 36, 16))
+    oval = pygame.Rect(36, 78, W-72, H-140)
+    pygame.draw.ellipse(surf, (14, 48, 22), oval)
+    pygame.draw.ellipse(surf, (17, 56, 27), oval.inflate(-30, -22))
+    pygame.draw.ellipse(surf, (20, 64, 32), oval.inflate(-60, -44))
+    pygame.draw.ellipse(surf, (62,  40, 14), oval, 26)
+    pygame.draw.ellipse(surf, (82,  54, 20), oval, 16)
+    pygame.draw.ellipse(surf, (105, 70, 28), oval,  8)
+    pygame.draw.ellipse(surf, (130, 88, 36), oval,  3)
 
 def draw_chips(surf, cx, cy, amount):
     """Draw a casino chip stack for 'amount'."""
@@ -458,53 +580,49 @@ def draw_roulette_wheel(surf, cx, cy, r, angle=0.0):
     """Draw a full roulette wheel at given center+radius+rotation angle (radians)."""
     n   = len(WHEEL_NUMS)
     seg = 2 * math.pi / n
-    # Outer wood rim - more polished
-    pygame.draw.circle(surf, (36, 20, 8), (cx, cy), r+16)
-    pygame.draw.circle(surf, (70, 45, 15), (cx, cy), r+12, 8)
-    pygame.draw.circle(surf, (110, 75, 28), (cx, cy), r+5, 4)
-    # Number pockets with improved colors
+    # Outer wood rim
+    pygame.draw.circle(surf, (48, 32, 12), (cx, cy), r+12)
+    pygame.draw.circle(surf, (72, 50, 20), (cx, cy), r+8, 6)
+    pygame.draw.circle(surf, (105,72, 28), (cx, cy), r+3, 3)
+    # Number pockets
     for i, num in enumerate(WHEEL_NUMS):
         a1 = i * seg + angle - math.pi/2
         a2 = (i+1)*seg + angle - math.pi/2
-        col = (20, 140, 50) if num==0 else (200, 30, 30) if num in RED_NUMS else (10, 10, 10)
+        col = (18,115,38) if num==0 else (172,28,28) if num in RED_NUMS else (14,14,14)
         pts = [(cx, cy)]
         for s in range(8):
             a = a1 + (a2-a1)*s/7
             pts.append((int(cx+r*math.cos(a)), int(cy+r*math.sin(a))))
         pygame.draw.polygon(surf, col, pts)
-        # Pocket divider - brighter
-        pygame.draw.line(surf, (85, 60, 25),
+        # Pocket divider at the start edge of this pocket
+        pygame.draw.line(surf, (65,46,18),
             (int(cx + 0.46*r*math.cos(a1)), int(cy + 0.46*r*math.sin(a1))),
-            (int(cx + r     *math.cos(a1)), int(cy + r     *math.sin(a1))), 2)
-    # Clean outer edge - chrome effect
-    pygame.draw.circle(surf, (110, 80, 35), (cx, cy), r, 4)
-    # Inner felt with better depth
+            (int(cx + r     *math.cos(a1)), int(cy + r     *math.sin(a1))), 1)
+    # Clean outer edge
+    pygame.draw.circle(surf, (90, 62, 24), (cx, cy), r, 3)
+    # Inner felt
     ir = int(r * 0.44)
-    pygame.draw.circle(surf, (14, 70, 35), (cx, cy), ir)
-    pygame.draw.circle(surf, (18, 90, 45), (cx, cy), int(ir*0.84))
-    # Spokes - more visible
+    pygame.draw.circle(surf, (16, 60, 28), (cx, cy), ir)
+    pygame.draw.circle(surf, (22, 76, 36), (cx, cy), int(ir*0.84))
+    # Spokes
     for s in range(8):
         sa = s * math.pi/4 + angle
-        pygame.draw.line(surf, (70, 50, 20),
+        pygame.draw.line(surf, (52, 36, 14),
             (cx, cy),
-            (int(cx+ir*math.cos(sa)), int(cy+ir*math.sin(sa))), 3)
-    # Center hub with shine
-    pygame.draw.circle(surf, (35, 20, 8), (cx, cy), int(r*0.13))
-    pygame.draw.circle(surf, (240, 200, 100), (cx, cy), int(r*0.1), 2)
-    pygame.draw.circle(surf, GOLD, (cx, cy), int(r*0.075))
-    pygame.draw.circle(surf, (255, 255, 255, 200), (cx-3, cy-3), int(r*0.045))
+            (int(cx+ir*math.cos(sa)), int(cy+ir*math.sin(sa))), 2)
+    # Center hub
+    pygame.draw.circle(surf, (45, 30, 10), (cx, cy), int(r*0.13))
+    pygame.draw.circle(surf, GOLD3,         (cx, cy), int(r*0.075))
+    pygame.draw.circle(surf, GOLD2,         (cx, cy), int(r*0.04))
 
 def draw_roulette_ball(surf, cx, cy, r, angle):
     orbit = r - 16
     bx = int(cx + orbit * math.cos(angle))
     by = int(cy + orbit * math.sin(angle))
-    # Shadow
-    pygame.draw.circle(surf, (0, 0, 0, 100), (bx+3, by+3), 10)
-    # Ball body with shine
-    pygame.draw.circle(surf, (20, 20, 20), (bx, by), 10)
-    pygame.draw.circle(surf, (240, 240, 240), (bx, by), 8)
-    pygame.draw.circle(surf, WHITE, (bx, by), 6)
-    pygame.draw.circle(surf, (200, 200, 200), (bx-3, by-3), 4)
+    pygame.draw.circle(surf, (30,30,30), (bx+2,by+2), 8)
+    pygame.draw.circle(surf, (210,210,210), (bx,by), 8)
+    pygame.draw.circle(surf, WHITE,          (bx,by), 6)
+    pygame.draw.circle(surf, (180,180,180),  (bx-2,by-2), 3)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Card fly animation
@@ -723,6 +841,167 @@ class Particle:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Global particles  (win bursts across all screens)
+# ─────────────────────────────────────────────────────────────────────────────
+GPARTICLES: list = []
+
+def spawn_coins(cx, cy, n=25):
+    for _ in range(n):
+        GPARTICLES.append(Particle(cx + random.randint(-140, 140), cy))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Screen shake
+# ─────────────────────────────────────────────────────────────────────────────
+class ScreenShake:
+    def __init__(self):
+        self._t = 1.0; self._dur = 1.0; self._amp = 0.0
+
+    def trigger(self, amp=9, dur=0.55):
+        self._t = 0.0; self._dur = dur; self._amp = amp
+
+    def update(self, dt):
+        if self._t < self._dur: self._t += dt
+
+    def offset(self):
+        if self._t >= self._dur: return (0, 0)
+        a = self._amp * (1.0 - self._t / self._dur)
+        return (int(random.uniform(-a, a)), int(random.uniform(-a, a)))
+
+SHAKE = ScreenShake()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Achievement system
+# ─────────────────────────────────────────────────────────────────────────────
+ACHIEVEMENTS = {
+    # ── Page 1 ──────────────────────────────────────────────────────────
+    "first_win":    ("First Win",        "Win any bet for the first time"),
+    "lucky_streak": ("On a Roll",        "Win 3 games in a row"),
+    "jackpot":      ("Jackpot!",         "Hit a slots jackpot"),
+    "high_roller":  ("High Roller",      "Place a single bet of 500+ coins"),
+    "comeback":     ("Comeback Kid",     "Win a game when under 100 coins"),
+    "loan_taken":   ("In Debt",          "Borrow from the loan shark"),
+    "debt_free":    ("Debt Free",        "Repay your loan in full"),
+    "broke":        ("Broke",            "Reach 0 coins"),
+    "rich":         ("Rolling in It",    "Reach a balance of 5,000 coins"),
+    "big_loss":     ("Gambler's Ruin",   "Lose 1,000+ coins in total"),
+    # ── Page 2 ──────────────────────────────────────────────────────────
+    "hot_streak":   ("Hot Streak",       "Win 5 games in a row"),
+    "the_house":    ("The House",        "Accumulate 10,000+ coins won in total"),
+    "veteran":      ("Veteran",          "Play 50 games total"),
+    "night_owl":    ("Night Owl",        "Start 5 or more sessions"),
+    "coin_hoarder": ("Coin Hoarder",     "Reach a balance of 2,500 coins"),
+    "big_single":   ("Big Win",          "Win 1,000+ coins in a single game"),
+    "no_luck":      ("No Luck Today",    "Lose 10 games in a row"),
+    "all_in":       ("All In",           "Bet 90%+ of your balance at once"),
+    "half_way":     ("Halfway There",    "Unlock 10 achievements"),
+    "completionist":("Completionist",    "Unlock all other achievements"),
+}
+ACH_PAGE_SIZE = 10
+
+
+class AchievementPopup:
+    DUR = 3.5
+
+    def __init__(self):
+        self._queue   = []
+        self._t       = 0.0
+        self._showing = None
+
+    def unlock(self, key, player):
+        achs = player.stats.setdefault("achievements", [])
+        if key not in achs and key in ACHIEVEMENTS:
+            achs.append(key)
+            self._queue.append((key,) + ACHIEVEMENTS[key])
+
+    def update(self, dt):
+        if self._showing:
+            self._t += dt
+            if self._t >= self.DUR:
+                self._showing = None; self._t = 0.0
+        if not self._showing and self._queue:
+            self._showing = self._queue.pop(0); self._t = 0.0
+
+    def draw(self, surf):
+        if not self._showing: return
+        _, name, desc = self._showing
+        slide_p = min(1.0, self._t / 0.25)
+        fade_p  = max(0.0, 1.0 - (self._t - (self.DUR - 0.4)) / 0.4) if self._t > self.DUR - 0.4 else 1.0
+        w, h    = 320, 72
+        x = W - w - 16
+        y = int(86 + (1.0 - slide_p) * -(h + 10))
+        s = pygame.Surface((w, h), pygame.SRCALPHA)
+        alpha = int(240 * fade_p)
+        pygame.draw.rect(s, (28, 22, 6, alpha), (0, 0, w, h), border_radius=10)
+        pygame.draw.rect(s, (255, 200, 0, min(255, alpha)), (0, 0, w, h), 2, border_radius=10)
+        surf.blit(s, (x, y))
+        al = int(255 * fade_p)
+        hdr = F_SMB.render("ACHIEVEMENT UNLOCKED!", True, GOLD)
+        hdr.set_alpha(al); surf.blit(hdr, hdr.get_rect(left=x+12, top=y+8))
+        nl = F_MDB.render(name, True, WHITE)
+        nl.set_alpha(al); surf.blit(nl, nl.get_rect(left=x+12, top=y+28))
+        dl = F_XS.render(desc, True, LGRAY)
+        dl.set_alpha(int(200 * fade_p)); surf.blit(dl, dl.get_rect(left=x+12, top=y+50))
+
+ACH = AchievementPopup()
+
+
+def _check_ach(player, gain=0, jackpot=False, bet=0, coins_before=0):
+    unlocked = player.stats.setdefault("achievements", [])
+    # ── Page 1 ──────────────────────────────────────────────────────────
+    if gain > 0:                              ACH.unlock("first_win",    player)
+    if jackpot:                               ACH.unlock("jackpot",      player)
+    if player.streak >= 3:                    ACH.unlock("lucky_streak", player)
+    if bet >= 500:                            ACH.unlock("high_roller",  player)
+    if gain > 0 and coins_before < 100:       ACH.unlock("comeback",     player)
+    if player.coins >= 5000:                  ACH.unlock("rich",         player)
+    if player.coins <= 0:                     ACH.unlock("broke",        player)
+    if player.stats.get("lost", 0) >= 1000:  ACH.unlock("big_loss",     player)
+    # ── Page 2 ──────────────────────────────────────────────────────────
+    if player.streak >= 5:                    ACH.unlock("hot_streak",    player)
+    if player.stats.get("won", 0) >= 10000:   ACH.unlock("the_house",     player)
+    if player.stats.get("games", 0) >= 50:    ACH.unlock("veteran",       player)
+    if player.stats.get("sessions", 0) >= 5:  ACH.unlock("night_owl",     player)
+    if player.coins >= 2500:                  ACH.unlock("coin_hoarder",  player)
+    if gain >= 1000:                          ACH.unlock("big_single",    player)
+    if player.streak <= -10:                  ACH.unlock("no_luck",       player)
+    if bet > 0 and coins_before > 0 and bet >= coins_before * 0.9:
+                                              ACH.unlock("all_in",        player)
+    n_unlocked = len(unlocked)
+    if n_unlocked >= 10:                      ACH.unlock("half_way",      player)
+    # completionist = all others unlocked (19/20)
+    all_keys = list(ACHIEVEMENTS.keys())
+    others = [k for k in all_keys if k != "completionist"]
+    if all(k in unlocked for k in others):    ACH.unlock("completionist", player)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Leaderboard  (top 10 peak balances, persisted to disk)
+# ─────────────────────────────────────────────────────────────────────────────
+LB_FILE = Path.home() / ".casino_royale_lb.json"
+
+
+def _lb_load():
+    try:
+        if LB_FILE.exists():
+            return json.loads(LB_FILE.read_text())
+    except: pass
+    return []
+
+
+def _lb_save(player):
+    entries = _lb_load()
+    entries.append({"name": player.name,
+                    "coins": player.coins,
+                    "peak":  player.stats.get("peak_coins", player.coins)})
+    entries.sort(key=lambda e: e["peak"], reverse=True)
+    try:
+        LB_FILE.write_text(json.dumps(entries[:10], indent=2))
+    except: pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Volume Slider
 # ─────────────────────────────────────────────────────────────────────────────
 class Slider:
@@ -928,6 +1207,12 @@ GAME_LIST = [
     ("coinflip",  "COIN FLIP",     "Double or nothing"),
 ]
 
+GAME_LIST_2 = [
+    ("poker",    "POKER",       "5-Card Draw Poker"),
+    ("baccarat", "BACCARAT",    "Player vs Banker"),
+    ("scratch",  "SCRATCH CARD","Reveal & Match 3"),
+]
+
 CAB_W, CAB_H  = 366, 220
 CAB_COLS      = 3
 CAB_ROWS      = 2
@@ -1006,6 +1291,35 @@ def _draw_cabinet_icon(surf, game_key, sx, sy, sw, sh):
         surf.blit(F_MDB.render("H", True, BLACK), F_MDB.render("H", True, BLACK).get_rect(center=(cx-8,cy)))
         surf.blit(F_MDB.render("T", True, BLACK), F_MDB.render("T", True, BLACK).get_rect(center=(cx+14,cy+4)))
 
+    elif game_key == "poker":
+        for i, (r2, s2, ox2, oy2) in enumerate([("A","S",-28,-12),("K","H",0,-6),("Q","D",28,-12)]):
+            card_r = pygame.Rect(cx+ox2-16, cy+oy2-20, 32, 44)
+            pygame.draw.rect(surf, CREAM, card_r, border_radius=5)
+            pygame.draw.rect(surf, LGRAY, card_r, 1, border_radius=5)
+            cc = RED if s2 in ("H","D") else BLACK
+            surf.blit(F_XS.render(r2, True, cc), (card_r.x+2, card_r.y+2))
+        surf.blit(F_SMB.render("POKER", True, GOLD), F_SMB.render("POKER", True, GOLD).get_rect(centerx=cx, centery=cy+38))
+
+    elif game_key == "baccarat":
+        for ox2, lbl in [(-40,"P"), (40,"B")]:
+            zr = pygame.Rect(cx+ox2-22, cy-24, 44, 48)
+            pygame.draw.rect(surf, PANELB, zr, border_radius=6)
+            pygame.draw.rect(surf, GOLD2, zr, 2, border_radius=6)
+            surf.blit(F_MDB.render(lbl, True, GOLD), F_MDB.render(lbl, True, GOLD).get_rect(center=zr.center))
+        surf.blit(F_SMB.render("vs", True, CREAM), F_SMB.render("vs", True, CREAM).get_rect(centerx=cx, centery=cy))
+        surf.blit(F_XS.render("BACCARAT", True, GOLD), F_XS.render("BACCARAT", True, GOLD).get_rect(centerx=cx, centery=cy+36))
+
+    elif game_key == "scratch":
+        cell_s = 16
+        for gi in range(9):
+            gr2, gc2 = gi // 3, gi % 3
+            gx2 = cx - 25 + gc2 * (cell_s + 3)
+            gy2 = cy - 20 + gr2 * (cell_s + 3)
+            col2 = (180, 200, 180) if gi % 3 == 0 else (100, 120, 100)
+            pygame.draw.rect(surf, col2, (gx2, gy2, cell_s, cell_s), border_radius=3)
+            pygame.draw.rect(surf, GRAY,  (gx2, gy2, cell_s, cell_s), 1, border_radius=3)
+        surf.blit(F_XS.render("SCRATCH", True, GOLD), F_XS.render("SCRATCH", True, GOLD).get_rect(centerx=cx, centery=cy+38))
+
 
 def draw_cabinet(surf, x, y, game_key, game_name, game_desc, hovered, can_afford=True):
     w, h  = CAB_W, CAB_H
@@ -1083,33 +1397,122 @@ def draw_lobby_bg(surf):
 class LobbyState:
     def __init__(self, player):
         self.player     = player
-        self._rects     = []
+        self.lobby_page = 0
+        self._rects_p0  = []
         for i, (key,_,_) in enumerate(GAME_LIST):
             col = i % CAB_COLS
             row = i // CAB_COLS
             x   = CAB_START_X + col*(CAB_W+CAB_GAP_X)
             y   = CAB_START_Y + row*(CAB_H+CAB_GAP_Y)
-            self._rects.append((key, pygame.Rect(x,y,CAB_W,CAB_H)))
-        bot = H - 46
-        self.settings_btn = Btn((W//2-340, bot, 150, 38), "SETTINGS",
+            self._rects_p0.append((key, pygame.Rect(x,y,CAB_W,CAB_H)))
+        # Page 1: 3 games, 1 row, centred
+        p1_cols = len(GAME_LIST_2)
+        p1_total_w = p1_cols*CAB_W + (p1_cols-1)*CAB_GAP_X
+        p1_start_x = (W - p1_total_w) // 2
+        p1_y = CAB_START_Y + (CAB_H + CAB_GAP_Y) // 2   # vertically centred area
+        self._rects_p1 = []
+        for i, (key,_,_) in enumerate(GAME_LIST_2):
+            x = p1_start_x + i*(CAB_W+CAB_GAP_X)
+            self._rects_p1.append((key, pygame.Rect(x, p1_y, CAB_W, CAB_H)))
+
+        bot  = H - 46
+        gap  = 8
+        ws   = [108, 108, 150, 140, 116, 88]   # per-button widths
+        totw = sum(ws) + (len(ws)-1)*gap
+        bx   = (W - totw) // 2
+        xs   = []
+        _cx  = bx
+        for w in ws:
+            xs.append(_cx); _cx += w + gap
+        self.settings_btn = Btn((xs[0], bot, ws[0], 38), "SETTINGS",
                                 PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SMB)
-        self.stats_btn    = Btn((W//2-170, bot, 150, 38), "MY STATS",
-                                PANELB, GOLD2, tc=GOLD, border=GOLD, font=F_SMB)
-        self.quit_btn     = Btn((W//2+20,  bot, 150, 38), "EXIT",
+        self.stats_btn    = Btn((xs[1], bot, ws[1], 38), "MY STATS",
+                                PANELB, GOLD2, tc=GOLD, border=GOLD,  font=F_SMB)
+        self.ach_btn      = Btn((xs[2], bot, ws[2], 38), "ACHIEVEMENTS",
+                                PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SMB)
+        self.lb_btn       = Btn((xs[3], bot, ws[3], 38), "LEADERBOARD",
+                                PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SMB)
+        self.loan_btn     = Btn((xs[4], bot, ws[4], 38), "LOAN SHARK",
+                                DKRED,  RED,   tc=WHITE, border=RED,  font=F_SMB)
+        self.repay_btn    = Btn((xs[4], bot, ws[4], 38), "REPAY LOAN",
+                                (10,60,25), WINC, tc=WINC, border=WINC, font=F_SMB)
+        self.quit_btn     = Btn((xs[5], bot, ws[5], 38), "EXIT",
                                 DKRED,  RED,  tc=WHITE, border=RED,  font=F_SMB)
+
+        # Page navigation arrows (centred vertically in cabinet area)
+        mid_y = CAB_START_Y + CAB_H + CAB_GAP_Y // 2
+        self.arr_left  = Btn((18, mid_y, 48, 48), "◄", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
+        self.arr_right = Btn((W-66, mid_y, 48, 48), "►", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
+
+        # Prestige button
+        self.prestige_btn = Btn((W//2-90, 88, 180, 32), "PRESTIGE ★",
+                                (60,40,0), (255,200,0), tc=(255,200,0), border=(200,160,0), font=F_SMB)
+
+        # Ghost players data
+        self._ghosts = []
+        self._ghost_timer = 0.0
+        self._init_ghosts()
+
+    def _init_ghosts(self):
+        self._ghosts = []
+        for _ in range(5):
+            self._ghosts.append({
+                "name":   random.choice(GHOST_NAMES),
+                "coins":  random.randint(500, 15000),
+                "game":   random.choice(GHOST_GAMES),
+                "action": "Playing",
+                "timer":  random.uniform(2, 5),
+            })
+
+    def _update_ghost(self, g):
+        amt = random.randint(10, 500)
+        g["name"]   = random.choice(GHOST_NAMES)
+        g["coins"]  = max(100, g["coins"] + random.randint(-300, 300))
+        g["game"]   = random.choice(GHOST_GAMES)
+        g["action"] = random.choice(["Playing", f"Won {amt}c", f"Lost {amt}c"])
+        g["timer"]  = random.uniform(2, 5)
 
     def handle_event(self, event):
         if self.settings_btn.clicked(event): return "settings"
         if self.stats_btn.clicked(event):    return "stats"
+        if self.ach_btn.clicked(event):      return "achievements"
+        if self.lb_btn.clicked(event):       return "leaderboard"
         if self.quit_btn.clicked(event):     return "quit"
+        if self.player.loan == 0:
+            if self.loan_btn.clicked(event): return "loanshark"
+        else:
+            if (self.player.coins >= self.player.loan
+                    and self.repay_btn.clicked(event)):
+                self.player.coins -= self.player.loan
+                self.player.loan   = 0
+                self.player.save()
+                ACH.unlock("debt_free", self.player)
+        # Page nav
+        if self.lobby_page == 0 and self.arr_right.clicked(event):
+            self.lobby_page = 1
+        if self.lobby_page == 1 and self.arr_left.clicked(event):
+            self.lobby_page = 0
+        # Prestige button
+        if self.player.coins >= PRESTIGE_THRESHOLD and self.prestige_btn.clicked(event):
+            self.player.coins = STARTING_COINS + self.player.prestige * PRESTIGE_BONUS
+            self.player.prestige += 1
+            self.player.record_history()
+            self.player.save()
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            for key, rect in self._rects:
+            rects = self._rects_p0 if self.lobby_page == 0 else self._rects_p1
+            for key, rect in rects:
                 if rect.collidepoint(event.pos):
                     SND.play("click")
                     return key
         return None
 
-    def update(self, dt): pass
+    def update(self, dt):
+        if SND.ghost_players:
+            self._ghost_timer += dt
+            for g in self._ghosts:
+                g["timer"] -= dt
+                if g["timer"] <= 0:
+                    self._update_ghost(g)
 
     def draw(self, surf):
         draw_lobby_bg(surf)
@@ -1118,20 +1521,76 @@ class LobbyState:
         t = F_TITLE.render("CASINO ROYALE", True, GOLD)
         surf.blit(t, t.get_rect(centerx=W//2, centery=48))
         display_balance = int(round(self.player.display_coins))
-        bal = F_MDB.render(
-            f"{self.player.name}   |   Balance:  {display_balance:,} c",
-            True, CREAM)
+        # Player name + prestige badge
+        name_str = self.player.name
+        if self.player.prestige > 0:
+            name_str += f"  ★×{self.player.prestige}"
+        if self.player.loan > 0:
+            bal_str = (f"{name_str}   |   Balance: {display_balance:,} c"
+                       f"   |   DEBT: {self.player.loan:,} c")
+            bal = F_SMB.render(bal_str, True, LOSEC)
+        else:
+            bal = F_MDB.render(
+                f"{name_str}   |   Balance:  {display_balance:,} c", True, CREAM)
         surf.blit(bal, bal.get_rect(centerx=W//2, centery=96))
+
+        # Prestige button (top area, only if threshold reached)
+        if self.player.coins >= PRESTIGE_THRESHOLD:
+            self.prestige_btn.draw(surf)
+
         pygame.draw.rect(surf, (4,12,8), (0,H-56,W,56))
         pygame.draw.line(surf, GOLD3, (0,H-56),(W,H-56), 1)
         self.settings_btn.draw(surf)
         self.stats_btn.draw(surf)
+        self.ach_btn.draw(surf)
+        self.lb_btn.draw(surf)
+        if self.player.loan > 0:
+            self.repay_btn.on = self.player.coins >= self.player.loan
+            self.repay_btn.draw(surf)
+        else:
+            self.loan_btn.draw(surf)
         self.quit_btn.draw(surf)
+
+        # Page indicator
+        pg_lbl = F_XS.render(f"Page {self.lobby_page+1}/2", True, GRAY)
+        surf.blit(pg_lbl, pg_lbl.get_rect(right=W-10, centery=H-37))
+
         mouse = pygame.mouse.get_pos()
-        for i, (key, name, desc) in enumerate(GAME_LIST):
-            _, rect = self._rects[i]
-            hovered = rect.collidepoint(mouse)
-            draw_cabinet(surf, rect.x, rect.y, key, name, desc, hovered, self.player.coins >= 10)
+        if self.lobby_page == 0:
+            for i, (key, name, desc) in enumerate(GAME_LIST):
+                _, rect = self._rects_p0[i]
+                hovered = rect.collidepoint(mouse)
+                draw_cabinet(surf, rect.x, rect.y, key, name, desc, hovered, self.player.coins >= 10)
+            self.arr_right.draw(surf)
+        else:
+            for i, (key, name, desc) in enumerate(GAME_LIST_2):
+                _, rect = self._rects_p1[i]
+                hovered = rect.collidepoint(mouse)
+                draw_cabinet(surf, rect.x, rect.y, key, name, desc, hovered, self.player.coins >= 10)
+            self.arr_left.draw(surf)
+
+        # Ghost players panel
+        if SND.ghost_players and self._ghosts:
+            px = W - 190
+            py = 130
+            pw, ph2 = 180, 220
+            ghost_surf = pygame.Surface((pw, ph2), pygame.SRCALPHA)
+            pygame.draw.rect(ghost_surf, (10, 20, 35, 210), (0, 0, pw, ph2), border_radius=10)
+            pygame.draw.rect(ghost_surf, (*GOLD2, 120), (0, 0, pw, ph2), 1, border_radius=10)
+            surf.blit(ghost_surf, (px, py))
+            hdr_l = F_SMB.render("ONLINE", True, GOLD)
+            surf.blit(hdr_l, hdr_l.get_rect(centerx=px+pw//2, top=py+6))
+            pygame.draw.line(surf, GOLD3, (px+8, py+24), (px+pw-8, py+24), 1)
+            for gi, g in enumerate(self._ghosts[:4]):
+                gy = py + 30 + gi * 46
+                dot_c = WINC if "Won" in g["action"] else (LOSEC if "Lost" in g["action"] else GOLD2)
+                pygame.draw.circle(surf, dot_c, (px+10, gy+8), 4)
+                nm_l = F_XS.render(g["name"][:12], True, WHITE)
+                surf.blit(nm_l, (px+18, gy))
+                act_l = F_XS.render(g["action"][:14], True, dot_c)
+                surf.blit(act_l, (px+18, gy+14))
+                gm_l = F_XS.render(g["game"][:12], True, GRAY)
+                surf.blit(gm_l, (px+18, gy+26))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Slot Machine  — cabinet body + animated lever
@@ -1286,15 +1745,20 @@ class SlotsState:
     def _resolve(self):
         a, b, c = self.result
         bet     = self._bet_placed
+        cb      = self.player.coins
         if a == b == c:
             gain = bet * S_PAY[a]
             self.player.win(gain)
+            self.player.update_streak(True)
             self.msg.show(f"JACKPOT!  {a} x3  +{gain:,} c", WINC, 3.5)
             SND.play("jackpot")
             self._win_flash = 2.5
             self._flash_t   = 0.28
+            SHAKE.trigger(10, 0.65)
             for _ in range(80):
                 self._particles.append(Particle(_M_CX + random.randint(-220, 220), 300))
+            spawn_coins(_M_CX, 320, 40)
+            _check_ach(self.player, gain=gain, jackpot=True, bet=bet, coins_before=cb)
         elif a == b or b == c or a == c:
             self.player.push()
             self.msg.show("Two matching — push!  Bet returned.", GOLD)
@@ -1302,10 +1766,14 @@ class SlotsState:
             self._win_flash = 1.0
             for _ in range(28):
                 self._particles.append(Particle(_M_CX + random.randint(-80, 80), 340))
+            spawn_coins(_M_CX, 340, 16)
+            _check_ach(self.player, bet=bet, coins_before=cb)
         else:
             self.player.lose(bet)
+            self.player.update_streak(False)
             self.msg.show(f"No match  —  -{bet:,} c", LOSEC)
             SND.play("lose")
+            _check_ach(self.player, bet=bet, coins_before=cb)
         if self.player.coins <= 0: self.player.coins = 0
         self.player.save()
         self.bet_sel.bet = max(10, min(self.bet_sel.bet, self.player.coins))
@@ -1322,60 +1790,48 @@ class SlotsState:
     def _draw_machine_body(self, surf):
         mx, my, mw, mh = _M_X, _M_Y, _M_W, _M_H
         # Drop shadow
-        shd = pygame.Surface((mw+16, mh+16), pygame.SRCALPHA)
-        pygame.draw.rect(shd, (0,0,0,140), (0,0,mw+16,mh+16), border_radius=20)
-        surf.blit(shd, (mx+4, my+4))
-        # Outer shell gradient effect
-        pygame.draw.rect(surf, (20,24,36), (mx, my, mw, mh), border_radius=18)
-        pygame.draw.rect(surf, (50,65,100), (mx, my, mw, mh), 3, border_radius=18)
-        # Inner panel with depth
-        pygame.draw.rect(surf, (32,40,56), (mx+8, my+8, mw-16, mh-16), border_radius=14)
-        # Side chrome rails - more polished
-        for sx2 in [mx+16, mx+mw-22]:
-            pygame.draw.rect(surf, (100,115,145), (sx2, my+50, 12, mh-90), border_radius=6)
-            pygame.draw.rect(surf, (180,195,215), (sx2+2, my+50, 4, mh-90), border_radius=3)
-        # Bottom panel - coin return area
+        shd = pygame.Surface((mw+12,mh+12), pygame.SRCALPHA)
+        pygame.draw.rect(shd,(0,0,0,90),(0,0,mw+12,mh+12),border_radius=20)
+        surf.blit(shd,(mx+6,my+6))
+        # Outer shell
+        pygame.draw.rect(surf,(36,42,52),(mx,my,mw,mh),border_radius=18)
+        # Inner panel
+        pygame.draw.rect(surf,(48,56,68),(mx+8,my+8,mw-16,mh-16),border_radius=14)
+        # Side chrome rails
+        for sx2 in [mx+18, mx+mw-24]:
+            pygame.draw.rect(surf,(62,70,84),(sx2,my+70,8,mh-110),border_radius=4)
+            pygame.draw.rect(surf,(90,100,115),(sx2+1,my+70,3,mh-110),border_radius=4)
+        # Bottom panel
         bpy = my+mh-52
-        pygame.draw.rect(surf, (18, 22, 32), (mx, bpy, mw, 52), border_radius=18)
-        pygame.draw.rect(surf, (40, 52, 80), (mx+10, bpy+8, mw-20, 36), border_radius=14)
-        csx, csy = mx+mw//2-28, bpy+18
-        pygame.draw.rect(surf, (12, 16, 24), (csx, csy, 56, 14), border_radius=8)
-        pygame.draw.rect(surf, (120, 170, 255), (csx, csy, 56, 14), 2, border_radius=8)
-        surf.blit(F_XS.render("INSERT COIN", True, GOLD),
-                  F_XS.render("INSERT COIN", True, GOLD).get_rect(centerx=mx+mw//2, centery=csy+7))
+        pygame.draw.rect(surf,(22, 30, 42),(mx,bpy,mw,52),border_radius=18)
+        pygame.draw.rect(surf,(44, 58, 82),(mx+10,bpy+8,mw-20,36),border_radius=14)
+        csx,csy = mx+mw//2-24, bpy+20
+        pygame.draw.rect(surf,(16,22,32),(csx,csy,48,10),border_radius=6)
+        pygame.draw.rect(surf,(90,140,220),(csx,csy,48,10),1,border_radius=6)
+        surf.blit(F_XS.render("INSERT COIN",True,LGRAY),
+                  F_XS.render("INSERT COIN",True,LGRAY).get_rect(centerx=mx+mw//2,top=csy+12))
+        pygame.draw.rect(surf,GOLD3,(mx,my,mw,mh),2,border_radius=18)
 
     def _draw_marquee(self, surf):
         mx, my, mw = _M_X, _M_Y, _M_W
         mh_q = 62
-        # Marquee background - darker gradient effect
         block = pygame.Rect(mx, my, mw, mh_q)
-        pygame.draw.rect(surf, (22, 28, 40), block, border_top_left_radius=18, border_top_right_radius=18)
-        pygame.draw.rect(surf, (45, 65, 110), block, 2, border_top_left_radius=18, border_top_right_radius=18)
-        # Horizontal scanlines for vintage feel
+        pygame.draw.rect(surf, PANELB, block, border_top_left_radius=18, border_top_right_radius=18)
         sh = pygame.Surface((mw, mh_q), pygame.SRCALPHA)
-        for i in range(5):
-            pygame.draw.line(sh, (255, 255, 255, 8), (0, 12 + i*11), (mw, 12 + i*11), 1)
-        surf.blit(sh, (mx, my))
-        # Title text with better styling
-        tl = F_LG.render("SLOT MACHINE", True, (255, 250, 200))
+        for i in range(4):
+            pygame.draw.line(sh, (255,255,255, 14), (0, 10 + i*12), (mw, 10 + i*12), 1)
+        surf.blit(sh, (mx,my))
+        tl = F_LG.render("SLOT MACHINE", True, WHITE)
         surf.blit(tl, tl.get_rect(centerx=mx+mw//2, centery=my+mh_q//2))
-        # Animated LED lights - more vibrant
-        tick = pygame.time.get_ticks()
-        phase = (tick//200) % 3
-        n_led = 24
-        lgap = (mw-48)//n_led
+        tick  = pygame.time.get_ticks()
+        phase = (tick//220)%2
+        n_led = 20
+        lgap  = (mw-40)//n_led
         for i in range(n_led):
-            lx2 = mx+24+i*lgap+lgap//2
-            # Cycling color animation
-            led_state = (i + phase) % 3
-            if led_state == 0:
-                lc = ROULRED
-            elif led_state == 1:
-                lc = GOLD
-            else:
-                lc = (60, 150, 255)
-            pygame.draw.circle(surf, lc, (lx2, my+mh_q-10), 6)
-            pygame.draw.circle(surf, (255, 255, 255, 120), (lx2-2, my+mh_q-12), 2)
+            lx2 = mx+20+i*lgap+lgap//2
+            on  = (i+phase)%2==0
+            lc  = GOLD if on else (GOLD3[0]//2,GOLD3[1]//2,GOLD3[2]//2)
+            pygame.draw.circle(surf,lc,(lx2,my+mh_q-10),5)
 
     def _draw_reel_window(self, surf):
         rw_total = 3*REEL_W + 2*20
@@ -1383,58 +1839,47 @@ class SlotsState:
         ry = 150
         bw2 = rw_total+40
         bh2 = REEL_H+40
-        # Outer bezel - chrome effect
-        pygame.draw.rect(surf, (16, 20, 28), (rx-20, ry-20, bw2, bh2), border_radius=16)
-        pygame.draw.rect(surf, (60, 90, 150), (rx-20, ry-20, bw2, bh2), 3, border_radius=16)
-        pygame.draw.rect(surf, (100, 130, 180), (rx-18, ry-18, bw2-4, bh2-4), 1, border_radius=14)
-        # Inner dark recess with depth
-        pygame.draw.rect(surf, (8, 10, 16), (rx-14, ry-14, bw2-12, bh2-12), border_radius=12)
-        pygame.draw.rect(surf, (20, 30, 50), (rx-14, ry-14, bw2-12, bh2-12), 1, border_radius=12)
+        # Outer bezel
+        pygame.draw.rect(surf,(22,26,34),(rx-20,ry-20,bw2,bh2),border_radius=14)
+        pygame.draw.rect(surf,(40,46,58),(rx-20,ry-20,bw2,bh2),2,border_radius=14)
+        # Inner dark recess
+        pygame.draw.rect(surf,(6,8,12),(rx-14,ry-14,bw2-12,bh2-12),border_radius=10)
         # Reels
         for i, reel in enumerate(self.reels):
             reel.draw(surf, rx+i*(REEL_W+20), ry)
-        # Glass overlay - stronger reflective effect
-        glass = pygame.Surface((bw2-12, bh2-12), pygame.SRCALPHA)
-        pygame.draw.rect(glass, (200, 230, 255, 12), (0, 0, bw2-12, bh2-12), border_radius=10)
-        pygame.draw.line(glass, (200, 230, 255, 40), (0, 20), (bw2-12, 20), 2)
-        surf.blit(glass, (rx-14, ry-14))
-        # PAY label with improved arrows
+        # Glass overlay
+        glass = pygame.Surface((bw2-12,bh2-12),pygame.SRCALPHA)
+        pygame.draw.rect(glass,(180,220,255,8),(0,0,bw2-12,bh2-12),border_radius=10)
+        surf.blit(glass,(rx-14,ry-14))
+        # PAY label with arrows
         py_cy = ry + REEL_H//2
-        pay_lbl = F_XS.render("PAY", True, GOLD)
-        surf.blit(pay_lbl, (rx-50, py_cy-8))
-        pygame.draw.polygon(surf, GOLD, [(rx-48, py_cy), (rx-36, py_cy-8), (rx-36, py_cy+8)])
-        # Win-flash glow on payline - brighter
+        surf.blit(F_XS.render("PAY",True,GOLD),(rx-46,py_cy-8))
+        pygame.draw.polygon(surf,GOLD,[(rx-48,py_cy),(rx-38,py_cy-6),(rx-38,py_cy+6)])
+        # Win-flash glow on payline
         if self._win_flash > 0:
-            pulse = abs(math.sin(self._win_flash * 10))
+            pulse = abs(math.sin(self._win_flash * 9))
             glow_s = pygame.Surface((bw2, SYM_H+16), pygame.SRCALPHA)
-            ga = int(100 * pulse)
-            pygame.draw.rect(glow_s, (255, 220, 50, ga), (0, 0, bw2, SYM_H+16), border_radius=8)
+            ga = int(60 * pulse)
+            pygame.draw.rect(glow_s, (255,215,0,ga),
+                             (0,0,bw2,SYM_H+16), border_radius=8)
             surf.blit(glow_s, (rx-20, ry+SYM_H-8))
             # Bright border on payline frame
-            bc = (int(220+35*pulse), int(180+35*pulse), 0)
-            pygame.draw.rect(surf, bc, (rx-6, ry+SYM_H-4, bw2-8, SYM_H+8), 4)
+            bc = (int(180+75*pulse), int(150+65*pulse), 0)
+            pygame.draw.rect(surf, bc, (rx-6, ry+SYM_H-4, bw2-8, SYM_H+8), 3)
 
     def _draw_paytable(self, surf):
-        px, py = _M_X+20, 148
-        pw, ph = 200, 400
-        # Panel with better styling
-        pygame.draw.rect(surf, (16, 22, 36), (px-2, py-2, pw+4, ph+4), border_radius=10)
-        pygame.draw.rect(surf, (20, 28, 42), (px, py, pw, ph), border_radius=10)
-        pygame.draw.rect(surf, (80, 120, 200), (px, py, pw, ph), 2, border_radius=10)
-        # Header
-        hdr = F_SMB.render("PAYTABLE", True, (255, 240, 150))
-        surf.blit(hdr, hdr.get_rect(centerx=px+pw//2, top=py+10))
-        pygame.draw.line(surf, (100, 140, 200), (px+10, py+34), (px+pw-10, py+34), 2)
-        # Payout rows with better styling
-        for i, (name, col, pay, _) in enumerate(SLOT_DEFS):
-            y2 = py+45+i*50
-            # Color swatch - larger and better styled
-            pygame.draw.rect(surf, col, (px+10, y2+2, 20, 20), border_radius=4)
-            pygame.draw.rect(surf, (200, 200, 200), (px+10, y2+2, 20, 20), 1, border_radius=4)
-            # Text with better contrast
-            surf.blit(F_SM.render(name, True, col), (px+36, y2))
-            payout_txt = F_XS.render(f"x3 = {pay}x", True, (200, 220, 255))
-            surf.blit(payout_txt, (px+36, y2+18))
+        px, py = _M_X+22, 148
+        pw, ph = 196, 400
+        panel(surf,(px,py,pw,ph),PANELB,GOLD3,1,8)
+        hdr = F_SMB.render("PAYTABLE",True,GOLD)
+        surf.blit(hdr, hdr.get_rect(centerx=px+pw//2,top=py+8))
+        pygame.draw.line(surf,GOLD3,(px+8,py+30),(px+pw-8,py+30),1)
+        for i,(name,col,pay,_) in enumerate(SLOT_DEFS):
+            y2 = py+40+i*50
+            # Color swatch
+            pygame.draw.rect(surf,col,(px+10,y2+2,18,18),border_radius=3)
+            surf.blit(F_SM.render(name,True,col),(px+34,y2))
+            surf.blit(F_XS.render(f"x3  =  {pay}x bet",True,LGRAY),(px+34,y2+17))
 
     def _draw_lever(self, surf):
         bx, by = self._lever_ball_pos()
@@ -1649,33 +2094,38 @@ class BlackjackState:
         self._end("compare")
 
     def _end(self, reason, p_bj=False, d_bj=False):
-        pv=hand_val(self.ph); dv=hand_val(self.dh); bet=self.bet
+        pv=hand_val(self.ph); dv=hand_val(self.dh); bet=self.bet; gained=0; cb=self.player.coins
         if reason == "bust":
             self.player.lose(bet); self.msg.show(f"Bust!  -{bet:,} c",LOSEC)
-            SND.play("lose")
+            SND.play("lose"); self.player.update_streak(False)
         elif reason == "bj_check":
             if p_bj and not d_bj:
-                w=int(bet*1.5); self.player.win(w)
+                w=int(bet*1.5); self.player.win(w); gained=w
                 self.msg.show(f"BLACKJACK!  +{w:,} c",WINC,3.0); SND.play("jackpot")
+                self.player.update_streak(True)
+                SHAKE.trigger(8, 0.45); spawn_coins(W//2, 390, 35)
             elif d_bj and not p_bj:
                 self.player.lose(bet); self.msg.show(f"Dealer Blackjack  -{bet:,} c",LOSEC)
-                SND.play("lose")
+                SND.play("lose"); self.player.update_streak(False)
             else:
                 self.player.push(); self.msg.show("Both Blackjack — Push!",GOLD)
                 SND.play("coin")
         elif reason == "compare":
             if dv>21:
-                self.player.win(bet); self.msg.show(f"Dealer busts!  +{bet:,} c",WINC)
-                SND.play("win")
+                self.player.win(bet); gained=bet
+                self.msg.show(f"Dealer busts!  +{bet:,} c",WINC); SND.play("win")
+                self.player.update_streak(True); spawn_coins(W//2, 390, 25)
             elif pv>dv:
-                self.player.win(bet); self.msg.show(f"You win {pv} vs {dv}!  +{bet:,} c",WINC)
-                SND.play("win")
+                self.player.win(bet); gained=bet
+                self.msg.show(f"You win {pv} vs {dv}!  +{bet:,} c",WINC); SND.play("win")
+                self.player.update_streak(True); spawn_coins(W//2, 390, 25)
             elif pv<dv:
                 self.player.lose(bet); self.msg.show(f"Dealer wins {dv} vs {pv}  -{bet:,} c",LOSEC)
-                SND.play("lose")
+                SND.play("lose"); self.player.update_streak(False)
             else:
                 self.player.push(); self.msg.show(f"Push — {pv} vs {dv}",GOLD)
                 SND.play("coin")
+        _check_ach(self.player, gain=gained, bet=bet, coins_before=cb)
         if self.player.coins<=0: self.player.coins=0
         self.player.save(); self.state="result"
 
@@ -1953,7 +2403,7 @@ class RouletteState:
 
     def _resolve(self):
         """Called once the ball has physically settled into its pocket."""
-        n = self.result; t = self.sel_type; bet = self.bet_locked
+        n = self.result; t = self.sel_type; bet = self.bet_locked; cb = self.player.coins
         won = False
         if   t=="number"  and n==self.pick_num:           won=True
         elif t=="red"     and n in RED_NUMS:               won=True
@@ -1968,13 +2418,15 @@ class RouletteState:
         pays = next(p for k,_,p in ROUL_BETS if k==t)
         if won:
             gain = bet * pays; self.player.win(gain)
+            self.player.update_streak(True)
             self.msg.show(f"WIN!  {n}  +{gain:,} c", WINC)
-            SND.play("win")
+            SND.play("win"); spawn_coins(300, 500, 25)
+            _check_ach(self.player, gain=gain, bet=bet, coins_before=cb)
         else:
             self.player.lose(bet)
+            self.player.update_streak(False)
             self.msg.show(f"LOSE  {n}  -{bet:,} c", LOSEC)
-            SND.play("lose")
-        # ball_angle is already correct — settling placed it in the pocket
+            SND.play("lose"); _check_ach(self.player, bet=bet, coins_before=cb)
         if self.player.coins <= 0: self.player.coins = 0
         self.player.save()
         self.state = "result"
@@ -2110,7 +2562,7 @@ class DiceState:
             if self.anim_t>=1.6: self._resolve()
 
     def _resolve(self):
-        d1,d2=self.d1,self.d2; total=d1+d2; bet=self.bet_sel.value; t=self.sel
+        d1,d2=self.d1,self.d2; total=d1+d2; bet=self.bet_sel.value; t=self.sel; cb=self.player.coins
         won=False
         if   t=="high"    and total>=8:          won=True
         elif t=="low"     and total<=6:           won=True
@@ -2121,12 +2573,15 @@ class DiceState:
         pays=next(p for k,_,p in DICE_BETS_DEF if k==t)
         if won:
             gain=bet*pays; self.player.win(gain)
+            self.player.update_streak(True)
             self.msg.show(f"WIN!  {d1}+{d2}={total}  +{gain:,} c",WINC)
-            SND.play("win")
+            SND.play("win"); spawn_coins(W//2, 390, 25)
+            _check_ach(self.player, gain=gain, bet=bet, coins_before=cb)
         else:
             self.player.lose(bet)
+            self.player.update_streak(False)
             self.msg.show(f"LOSE  {d1}+{d2}={total}  -{bet:,} c",LOSEC)
-            SND.play("lose")
+            SND.play("lose"); _check_ach(self.player, bet=bet, coins_before=cb)
         if self.player.coins<=0: self.player.coins=0
         self.player.save()
         self.state         = "result"
@@ -2154,26 +2609,24 @@ class DiceState:
         bl = rot(cx-cw_bot//2, cy)
         cup_pts = [tl, tr, br, bl]
 
-        # Shadow - more pronounced
-        shd_pts = [(p[0]+5, p[1]+5) for p in cup_pts]
-        shd_s = pygame.Surface((W, H), pygame.SRCALPHA)
-        pygame.draw.polygon(shd_s, (0, 0, 0, 100), shd_pts)
-        surf.blit(shd_s, (0, 0))
+        # Shadow
+        shd_pts = [(p[0]+4, p[1]+4) for p in cup_pts]
+        shd_s = pygame.Surface((W,H), pygame.SRCALPHA)
+        pygame.draw.polygon(shd_s,(0,0,0,60),shd_pts)
+        surf.blit(shd_s,(0,0))
 
-        # Cup body with better colors - leather-like
-        pygame.draw.polygon(surf, (85, 75, 60), cup_pts)
-        pygame.draw.polygon(surf, (110, 95, 70), cup_pts, 4)
-        # Top rim - chrome effect
-        pygame.draw.line(surf, (160, 165, 180), tl, tr, 6)
-        pygame.draw.line(surf, (130, 135, 150), tl, tr, 3)
-        # Bottom rim band - more defined
-        pygame.draw.line(surf, (130, 120, 90), bl, br, 5)
-        # Handle nub - improved
-        handle_top = rot(cx+cw_bot//2+12, cy-12)
-        handle_bot = rot(cx+cw_bot//2+12, cy+8)
-        pygame.draw.line(surf, (130, 120, 100), br, handle_top, 10)
-        pygame.draw.line(surf, (130, 120, 100), br, handle_bot, 10)
-        pygame.draw.line(surf, (160, 150, 120), br, handle_top, 4)
+        # Cup body
+        pygame.draw.polygon(surf,(75,80,95),cup_pts)
+        pygame.draw.polygon(surf,(95,102,120),cup_pts,3)
+        # Top rim
+        pygame.draw.line(surf,(130,138,158),tl,tr,5)
+        # Bottom rim band
+        pygame.draw.line(surf,(110,118,138),bl,br,4)
+        # Handle nub
+        handle_top = rot(cx+cw_bot//2+10, cy-12)
+        handle_bot = rot(cx+cw_bot//2+10, cy+8)
+        pygame.draw.line(surf,(110,115,135),br,handle_top,8)
+        pygame.draw.line(surf,(110,115,135),br,handle_bot,8)
 
     def draw(self, surf):
         draw_felt_bg(surf)
@@ -2265,17 +2718,19 @@ class HiLoState:
         return None
 
     def _resolve(self, guess):
-        v1,v2=card_val(self.c1[0]),card_val(self.c2[0]); bet=self.bet_sel.value
+        v1,v2=card_val(self.c1[0]),card_val(self.c2[0]); bet=self.bet_sel.value; cb=self.player.coins
         SND.play("card")
         if v1==v2:
             self.player.push(); self.msg.show("Equal — Push!  Bet returned.",GOLD)
-            SND.play("coin")
+            SND.play("coin"); _check_ach(self.player, bet=bet, coins_before=cb)
         elif (guess=="h" and v2>v1) or (guess=="l" and v2<v1):
             self.player.win(bet); self.msg.show(f"Correct!  +{bet:,} c",WINC)
-            SND.play("win")
+            SND.play("win"); self.player.update_streak(True)
+            spawn_coins(W//2, 310, 25); _check_ach(self.player, gain=bet, bet=bet, coins_before=cb)
         else:
             self.player.lose(bet); self.msg.show(f"Wrong!  -{bet:,} c",LOSEC)
-            SND.play("lose")
+            SND.play("lose"); self.player.update_streak(False)
+            _check_ach(self.player, bet=bet, coins_before=cb)
         if self.player.coins<=0: self.player.coins=0
         self.player.save(); self.state="result"; self.reveal_t=0.0
 
@@ -2377,79 +2832,61 @@ class CoinFlipState:
             if self.flip_t>=1.8: self._resolve()
 
     def _resolve(self):
-        bet=self.bet_sel.value
+        bet=self.bet_sel.value; cb=self.player.coins
         if self.choice==self.result:
             self.player.win(bet); self.msg.show(f"{'Heads' if self.result=='H' else 'Tails'}!  Correct!  +{bet:,} c",WINC)
-            SND.play("win")
+            SND.play("win"); self.player.update_streak(True)
+            spawn_coins(W//2, 360, 25); _check_ach(self.player, gain=bet, bet=bet, coins_before=cb)
         else:
             self.player.lose(bet); self.msg.show(f"{'Heads' if self.result=='H' else 'Tails'}!  Wrong.  -{bet:,} c",LOSEC)
-            SND.play("lose")
+            SND.play("lose"); self.player.update_streak(False)
+            _check_ach(self.player, bet=bet, coins_before=cb)
         if self.player.coins<=0: self.player.coins=0
         self.player.save(); self.state="result"
 
     def _draw_pedestal(self, surf, cx, py):
         """Draw a multi-step stone pedestal centred at cx, top at py."""
-        # Base shadow
-        shadow = pygame.Surface((120, 40), pygame.SRCALPHA)
-        pygame.draw.ellipse(shadow, (0, 0, 0, 80), (0, 0, 120, 40))
-        surf.blit(shadow, (cx-60, py+40))
-        
-        for i, (w2, h2, col) in enumerate([
-                (100, 14, (95, 80, 60)),
-                (80, 12, (115, 95, 70)),
-                (60, 16, (85, 70, 50))]):
-            # Pedestal step with shadow
-            pygame.draw.rect(surf, (60, 50, 30), (cx-w2//2+2, py+i*10+2, w2, h2), border_radius=5)
-            # Main step
-            pygame.draw.rect(surf, col, (cx-w2//2, py+i*10, w2, h2), border_radius=5)
-            # Bright top edge
-            pygame.draw.rect(surf, (min(255, col[0]+40), min(255, col[1]+30), min(255, col[2]+20)),
-                             (cx-w2//2, py+i*10, w2, h2), 3, border_radius=5)
+        for i, (w2,h2,col) in enumerate([
+                (100,12,(90,75,55)),(80,10,(110,92,68)),(60,14,(80,65,45))]):
+            pygame.draw.rect(surf,col,(cx-w2//2,py+i*10,w2,h2),border_radius=4)
+            pygame.draw.rect(surf,(min(255,col[0]+30),min(255,col[1]+24),min(255,col[2]+18)),
+                             (cx-w2//2,py+i*10,w2,h2),2,border_radius=4)
 
     def _draw_coin(self, surf, cx, cy, phase, face):
         """Draw a 3D-looking gold coin. phase 0-1 controls flip squish."""
         squish = abs(math.cos(phase * math.pi * 5))
         if self.state == "result":
             squish = 1.0
-        cw = max(8, int(130*squish)); ch = 130
+        cw = max(6, int(130*squish)); ch = 130
 
-        col_face = (220, 180, 80) if face=="H" else (200, 160, 60)
-        col_edge = (180, 140, 40)
-        col_rim  = (240, 210, 130)
-        col_dark = (100, 80, 20)
+        col_face = GOLD if face=="H" else GOLD2
+        col_edge = GOLD3
+        col_rim  = (min(255,GOLD[0]+20),min(255,GOLD[1]+20),min(255,GOLD[2]+20))
 
-        # Shadow - more pronounced
-        shd = pygame.Surface((cw+24, ch+24), pygame.SRCALPHA)
-        pygame.draw.ellipse(shd, (0, 0, 0, 120), (12, 18, cw, ch))
-        surf.blit(shd, (cx-cw//2-8, cy-ch//2+10))
+        # Shadow
+        shd = pygame.Surface((cw+20,ch+20),pygame.SRCALPHA)
+        pygame.draw.ellipse(shd,(0,0,0,60),(10,16,cw,ch))
+        surf.blit(shd,(cx-cw//2-6,cy-ch//2+8))
 
-        # Coin body with gradient effect
-        r2 = pygame.Rect(cx-cw//2, cy-ch//2, cw, ch)
-        pygame.draw.ellipse(surf, col_dark, r2)
-        pygame.draw.ellipse(surf, col_face, r2.inflate(-6, -6))
-        # Metallic rim - brighter
-        pygame.draw.ellipse(surf, col_rim, r2, 5)
-        # Inner ring - darker edge
-        if cw > 40:
-            ir2 = r2.inflate(-22, -22)
-            pygame.draw.ellipse(surf, col_edge, ir2, 3)
-        # Face letter - improved visibility
-        if cw > 50:
-            lbl = F_HUGE.render(face, True, col_dark)
-            surf.blit(lbl, lbl.get_rect(center=(cx, cy)))
-        # Shine - multiple highlights for metallic effect
-        if cw > 30:
-            # Main shine
-            sh_r = pygame.Rect(cx-cw//5, cy-ch//3, cw//3, ch//6)
-            sh_s = pygame.Surface((sh_r.w, sh_r.h), pygame.SRCALPHA)
-            pygame.draw.ellipse(sh_s, (255, 255, 255, 80), (0, 0, sh_r.w, sh_r.h))
-            surf.blit(sh_s, (sh_r.x, sh_r.y))
-            # Secondary shine
-            if cw > 50:
-                sh_r2 = pygame.Rect(cx+cw//8, cy+ch//6, cw//4, ch//8)
-                sh_s2 = pygame.Surface((sh_r2.w, sh_r2.h), pygame.SRCALPHA)
-                pygame.draw.ellipse(sh_s2, (255, 255, 255, 40), (0, 0, sh_r2.w, sh_r2.h))
-                surf.blit(sh_s2, (sh_r2.x, sh_r2.y))
+        # Coin body
+        r2 = pygame.Rect(cx-cw//2,cy-ch//2,cw,ch)
+        pygame.draw.ellipse(surf,col_face,r2)
+        # Metallic ring
+        pygame.draw.ellipse(surf,col_rim,r2,4)
+        # Inner ring
+        if cw>40:
+            ir2 = r2.inflate(-20,-20)
+            pygame.draw.ellipse(surf,col_edge,ir2,2)
+        # Face letter
+        if cw>50:
+            lbl=F_HUGE.render(face,True,col_edge)
+            surf.blit(lbl,lbl.get_rect(center=(cx,cy)))
+        # Shine
+        if cw>30:
+            sh_r=pygame.Rect(cx-cw//4,cy-ch//3,cw//3,ch//5)
+            sh_s=pygame.Surface((sh_r.w,sh_r.h),pygame.SRCALPHA)
+            pygame.draw.ellipse(sh_s,(255,255,255,55),(0,0,sh_r.w,sh_r.h))
+            surf.blit(sh_s,(sh_r.x,sh_r.y))
 
     def draw(self, surf):
         draw_felt_bg(surf)
@@ -2528,36 +2965,92 @@ class StatsState:
             vl=F_MDB.render(value,True,vc)
             surf.blit(vl,(bx+bw-vl.get_width()-12,y2+bh//2-11))
 
+        # ── Balance History sparkline ──────────────────────────────────
+        history = p.stats.get("history", [])
+        graph_x = W//2 - 390
+        graph_y = 560
+        graph_w = 780
+        graph_h = 110
+        panel(surf, (graph_x-8, graph_y-24, graph_w+16, graph_h+40), PANELB, GOLD3, 1, 8)
+        ghdr = F_SMB.render("BALANCE HISTORY", True, GOLD)
+        surf.blit(ghdr, ghdr.get_rect(centerx=W//2, top=graph_y-20))
+        if len(history) >= 2:
+            mn = min(history)
+            mx = max(history)
+            rng = max(1, mx - mn)
+            pts = []
+            for i, val in enumerate(history):
+                px2 = graph_x + int(i / (len(history)-1) * graph_w)
+                py2 = graph_y + graph_h - int((val - mn) / rng * graph_h)
+                pts.append((px2, py2))
+            # Fill under line (dark blue)
+            fill_pts = [(graph_x, graph_y+graph_h)] + pts + [(graph_x+graph_w, graph_y+graph_h)]
+            fill_s = pygame.Surface((graph_w+2, graph_h+2), pygame.SRCALPHA)
+            adjusted = [(p2x - graph_x, p2y - graph_y) for p2x,p2y in fill_pts]
+            if len(adjusted) >= 3:
+                pygame.draw.polygon(fill_s, (*DKBLUE, 120), adjusted)
+            surf.blit(fill_s, (graph_x, graph_y))
+            # Gold line
+            if len(pts) >= 2:
+                pygame.draw.lines(surf, GOLD, False, pts, 2)
+            # Reference line at STARTING_COINS
+            if mn <= STARTING_COINS <= mx:
+                ref_y = graph_y + graph_h - int((STARTING_COINS - mn) / rng * graph_h)
+                pygame.draw.line(surf, GRAY, (graph_x, ref_y), (graph_x+graph_w, ref_y), 1)
+                ref_l = F_XS.render(f"Start {STARTING_COINS:,}c", True, GRAY)
+                surf.blit(ref_l, (graph_x+2, ref_y-14))
+            # Latest value
+            latest_l = F_XS.render(f"{history[-1]:,} c", True, GOLD)
+            surf.blit(latest_l, latest_l.get_rect(left=graph_x+graph_w+4, centery=pts[-1][1]))
+        else:
+            no_hist = F_SM.render("No history yet — play some games!", True, GRAY)
+            surf.blit(no_hist, no_hist.get_rect(centerx=W//2, centery=graph_y+graph_h//2))
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Settings  — volume sliders
 # ─────────────────────────────────────────────────────────────────────────────
 class SettingsState:
     def __init__(self, player):
         self.player   = player
-        self.back_btn = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
-        self.test_btn = Btn((W//2-75, 670, 150, 46), "► TEST SOUND",
-                            GOLD3, GOLD, tc=BLACK, font=F_MDB)
         mid = W // 2
-        # Initialise sliders from current SND values
-        self.master_sl = Slider(mid, 290, 560, "Master Volume", SND.master)
-        self.sfx_sl    = Slider(mid, 420, 560, "SFX Volume",    SND.sfx)
-        self.card_back_idx = SND.card_back
-        self.card_back_btn = Btn((mid-200, 520, 400, 50), f"Card Back: {CARD_BACK_STYLE_NAMES[SND.card_back]}", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
+        self.back_btn      = Btn((20, 18, 90, 36), "< Back", PANELB, GOLD2,
+                                 tc=GOLD, border=GOLD2, font=F_SM)
+        # ── AUDIO ───────────────────────────────────────────────────────
+        self.master_sl     = Slider(mid, 152, 560, "Master Volume", SND.master)
+        self.sfx_sl        = Slider(mid, 220, 560, "SFX Volume",    SND.sfx)
+        # ── APPEARANCE ──────────────────────────────────────────────────
+        self.card_back_btn = Btn((mid - 170, 349, 280, 42),
+                                 f"Card Back: {CARD_BACK_STYLE_NAMES[SND.card_back]}",
+                                 PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
+        # ── GAMEPLAY ────────────────────────────────────────────────────
+        self.ghost_btn     = Btn((mid - 170, 447, 280, 38),
+                                 f"Ghost Players: {'ON' if SND.ghost_players else 'OFF'}",
+                                 PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
+        self.music_btn     = Btn((mid - 170, 491, 280, 38),
+                                 f"Music: {'ON' if SND.music_on else 'OFF'}",
+                                 PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
+        # ── TEST SOUND ──────────────────────────────────────────────────
+        self.test_btn      = Btn((mid - 80, 543, 160, 42), "► TEST SOUND",
+                                 GOLD3, GOLD, tc=BLACK, font=F_MDB)
 
     def handle_event(self, event):
         self.master_sl.handle(event)
         self.sfx_sl.handle(event)
-        # Live update while dragging
         SND.master = self.master_sl.value
         SND.sfx    = self.sfx_sl.value
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            pass  # removed card_back_rects
         if self.card_back_btn.clicked(event):
             SND.card_back = (SND.card_back + 1) % len(CARD_BACK_STYLE_NAMES)
             self.card_back_btn.label = f"Card Back: {CARD_BACK_STYLE_NAMES[SND.card_back]}"
             SND.play("click")
         if self.test_btn.clicked(event):
             SND.play("win")
+        if self.ghost_btn.clicked(event):
+            SND.ghost_players = not SND.ghost_players
+            self.ghost_btn.label = f"Ghost Players: {'ON' if SND.ghost_players else 'OFF'}"
+        if self.music_btn.clicked(event):
+            SND.music_on = not SND.music_on
+            self.music_btn.label = f"Music: {'ON' if SND.music_on else 'OFF'}"
+            SND.start_music()
         if self.back_btn.clicked(event):
             SND.save()
             return "lobby"
@@ -2568,38 +3061,54 @@ class SettingsState:
     def draw(self, surf):
         draw_felt_bg(surf)
         top_bar(surf, "SETTINGS", self.player, self.back_btn)
+        cx = W // 2
 
-        t = F_TITLE.render("Volume Settings", True, GOLD)
-        surf.blit(t, t.get_rect(centerx=W//2, centery=162))
-        pygame.draw.line(surf, GOLD3, (W//2-340,204),(W//2+340,204), 1)
+        # ── AUDIO (y 88–300) ──────────────────────────────────────────
+        panel(surf, (cx - 310, 88, 620, 212), (10, 16, 24), GOLD3, 1, 12)
+        surf.blit(F_MDB.render("AUDIO", True, GOLD),
+                  F_MDB.render("AUDIO", True, GOLD).get_rect(centerx=cx, centery=108))
+        pygame.draw.line(surf, GOLD3, (cx - 290, 122), (cx + 290, 122), 1)
 
         self.master_sl.draw(surf)
         self.sfx_sl.draw(surf)
 
-        # Effective-volume preview bar
         eff = max(0.0, min(1.0, SND.master * SND.sfx))
-        bar_x, bar_y, bar_w, bar_h = W//2-260, 498, 520, 14
-        pygame.draw.rect(surf,(28,36,46),(bar_x,bar_y,bar_w,bar_h),border_radius=7)
+        bx, by, bw, bh = cx - 240, 258, 480, 11
+        pygame.draw.rect(surf, (28, 36, 46), (bx, by, bw, bh), border_radius=5)
         if eff > 0:
-            fc = (int(220*(1-eff)+30*eff), int(60+160*eff), 40)
-            pygame.draw.rect(surf, fc,
-                             (bar_x, bar_y, int(eff*bar_w), bar_h), border_radius=7)
-        pygame.draw.rect(surf,GOLD3,(bar_x,bar_y,bar_w,bar_h),1,border_radius=7)
-        lbl = F_SMB.render(f"Effective volume:  {int(eff*100)} %", True, LGRAY)
-        surf.blit(lbl, lbl.get_rect(centerx=W//2, top=bar_y+18))
+            fc = (int(220*(1-eff) + 30*eff), int(60 + 160*eff), 40)
+            pygame.draw.rect(surf, fc, (bx, by, int(eff*bw), bh), border_radius=5)
+        pygame.draw.rect(surf, GOLD3, (bx, by, bw, bh), 1, border_radius=5)
+        eff_lbl = F_SM.render(f"Effective:  {int(eff*100)} %", True, LGRAY)
+        surf.blit(eff_lbl, eff_lbl.get_rect(centerx=cx, top=by + 14))
 
-        # Card back selection
-        mid = W // 2
+        # ── APPEARANCE (y 308–397) ────────────────────────────────────
+        panel(surf, (cx - 310, 308, 620, 89), (10, 16, 24), GOLD3, 1, 12)
+        surf.blit(F_MDB.render("APPEARANCE", True, GOLD),
+                  F_MDB.render("APPEARANCE", True, GOLD).get_rect(centerx=cx, centery=328))
+        pygame.draw.line(surf, GOLD3, (cx - 290, 342), (cx + 290, 342), 1)
+
         self.card_back_btn.draw(surf)
-        preview_rect = pygame.Rect(mid + 210, 520, 80, 50)
-        pygame.draw.rect(surf, PANELB, preview_rect, border_radius=8)
-        pygame.draw.rect(surf, GOLD3, preview_rect, 2, border_radius=8)
-        draw_card_back(surf, preview_rect.x + 5, preview_rect.y + 5, preview_rect.w - 10, preview_rect.h - 10, SND.card_back)
+        pr = pygame.Rect(cx + 120, 350, 58, 40)
+        pygame.draw.rect(surf, PANELB, pr, border_radius=6)
+        pygame.draw.rect(surf, GOLD3,  pr, 1, border_radius=6)
+        draw_card_back(surf, pr.x + 4, pr.y + 4, pr.w - 8, pr.h - 8, SND.card_back)
 
+        # ── GAMEPLAY (y 405–535) ──────────────────────────────────────
+        panel(surf, (cx - 310, 405, 620, 130), (10, 16, 24), GOLD3, 1, 12)
+        surf.blit(F_MDB.render("GAMEPLAY", True, GOLD),
+                  F_MDB.render("GAMEPLAY", True, GOLD).get_rect(centerx=cx, centery=425))
+        pygame.draw.line(surf, GOLD3, (cx - 290, 439), (cx + 290, 439), 1)
+
+        self.ghost_btn.draw(surf)
+        self.music_btn.draw(surf)
+
+        # ── TEST SOUND ────────────────────────────────────────────────
         self.test_btn.draw(surf)
 
-        hint = F_SM.render("Drag the sliders, then press  < Back  to save.", True, GRAY)
-        surf.blit(hint, hint.get_rect(centerx=W//2, centery=715))
+        # ── Hint ──────────────────────────────────────────────────────
+        hint = F_SM.render("Changes save automatically when you go back.", True, GRAY)
+        surf.blit(hint, hint.get_rect(centerx=cx, centery=600))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Game Over
@@ -2646,6 +3155,777 @@ class GameOverState:
         self.again_btn.draw(surf); self.quit_btn.draw(surf)
         surf.blit(F_SM.render("Start over with 1,000 fresh coins, or exit.",True,GRAY),
                   F_SM.render("Start over with 1,000 fresh coins, or exit.",True,GRAY).get_rect(centerx=W//2,centery=632))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Loan Shark
+# ─────────────────────────────────────────────────────────────────────────────
+class LoanSharkState:
+    LOAN_AMT  = 500
+    REPAY_AMT = 750
+
+    def __init__(self, player):
+        self.player     = player
+        self.back_btn   = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
+        self.borrow_btn = Btn((W//2-90,440,180,52),"BORROW 500c",DKRED,RED,tc=WHITE,font=F_MDB)
+
+    def handle_event(self, event):
+        if self.back_btn.clicked(event): return "lobby"
+        if self.player.loan == 0 and self.borrow_btn.clicked(event):
+            self.player.coins += self.LOAN_AMT
+            self.player.loan   = self.REPAY_AMT
+            self.player.save()
+            ACH.unlock("loan_taken", self.player)
+            return "lobby"
+        return None
+
+    def update(self, dt): pass
+
+    def draw(self, surf):
+        surf.fill((6, 6, 10))
+        ov = pygame.Surface((W, H), pygame.SRCALPHA)
+        ov.fill((50, 0, 0, 70)); surf.blit(ov, (0,0))
+        top_bar(surf, "LOAN SHARK", self.player, self.back_btn)
+        cx = W // 2
+        t = F_TITLE.render("LOAN  SHARK", True, LOSEC)
+        surf.blit(t, t.get_rect(centerx=cx, centery=170))
+        pygame.draw.line(surf, DKRED, (cx-300, 208), (cx+300, 208), 1)
+        lines = [
+            ("Need coins fast?  I can help.", LGRAY),
+            ("", WHITE),
+            (f"Borrow:   {self.LOAN_AMT:,} coins  — added to your balance now.", GOLD),
+            (f"Repay:    {self.REPAY_AMT:,} coins  — button appears in the lobby.", LOSEC),
+            ("", WHITE),
+            ("You can only hold one loan at a time.", GRAY),
+            ("Don't keep me waiting.", GRAY),
+        ]
+        for i, (line, col) in enumerate(lines):
+            if not line: continue
+            s = F_MD.render(line, True, col)
+            surf.blit(s, s.get_rect(centerx=cx, top=248 + i*38))
+        if self.player.loan == 0:
+            self.borrow_btn.draw(surf)
+        else:
+            m = F_MDB.render(f"You already owe  {self.player.loan:,} c  — repay in the lobby first.", True, LOSEC)
+            surf.blit(m, m.get_rect(centerx=cx, centery=452))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Leaderboard
+# ─────────────────────────────────────────────────────────────────────────────
+class LeaderboardState:
+    def __init__(self, player):
+        self.player   = player
+        self.back_btn = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
+        self.entries  = _lb_load()
+
+    def handle_event(self, event):
+        if self.back_btn.clicked(event): return "lobby"
+        return None
+
+    def update(self, dt): pass
+
+    def draw(self, surf):
+        draw_felt_bg(surf)
+        top_bar(surf, "HALL OF FAME", self.player, self.back_btn)
+        cx = W // 2
+        t = F_TITLE.render("HALL  OF  FAME", True, GOLD)
+        surf.blit(t, t.get_rect(centerx=cx, centery=140))
+        pygame.draw.line(surf, GOLD3, (cx-300, 170), (cx+300, 170), 1)
+        if not self.entries:
+            surf.blit(F_MDB.render("No entries yet — exit a session to appear here.", True, GRAY),
+                      F_MDB.render("No entries yet — exit a session to appear here.", True, GRAY)
+                      .get_rect(centerx=cx, centery=360))
+            return
+        hx, hy = cx-340, 190
+        pygame.draw.rect(surf, PANELB, (hx, hy, 680, 36), border_radius=6)
+        for lbl, lx in [("RANK",hx+20),("NAME",hx+110),("PEAK BALANCE",hx+390),("FINAL",hx+550)]:
+            surf.blit(F_SMB.render(lbl, True, GOLD2), (lx, hy+8))
+        rank_colors = [GOLD, LGRAY, (180,130,60)]
+        for i, e in enumerate(self.entries[:8]):
+            ey = hy + 44 + i*46
+            if i % 2 == 0:
+                pygame.draw.rect(surf, (12,30,18), (hx, ey, 680, 44), border_radius=4)
+            col = rank_colors[i] if i < 3 else GRAY
+            surf.blit(F_MDB.render(f"#{i+1}", True, col),         (hx+20,  ey+11))
+            surf.blit(F_MDB.render(e["name"], True, WHITE),       (hx+110, ey+11))
+            surf.blit(F_MDB.render(f"{e.get('peak',e['coins']):,} c", True, GOLD), (hx+390, ey+11))
+            surf.blit(F_MDB.render(f"{e['coins']:,} c", True, LGRAY), (hx+550, ey+11))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Achievements screen
+# ─────────────────────────────────────────────────────────────────────────────
+class AchievementsState:
+    ANIM_DUR = 0.32
+    GRID_Y   = 178
+    GRID_H   = 480   # clipping height for slide area
+
+    def __init__(self, player):
+        self.player    = player
+        self.page      = 0          # 0 or 1 (currently displayed)
+        self._next_pg  = 0          # page being animated to
+        self._t        = 1.0        # 1.0 = idle; 0..1 = animating
+        self._dir      = 1          # +1 = forward (page 0→1), -1 = backward
+        self.back_btn  = Btn((20, 18, 90, 36), "< Back", PANELB, GOLD2,
+                             tc=GOLD, border=GOLD2, font=F_SM)
+        self.prev_btn  = Btn((W//2 - 112, H - 46, 104, 34), "< Page 1",
+                             PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SM)
+        self.next_btn  = Btn((W//2 +   8, H - 46, 104, 34), "Page 2 >",
+                             PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SM)
+
+    def _start_anim(self, direction):
+        if self._t < 1.0: return   # already animating
+        self._dir     = direction
+        self._next_pg = self.page + direction
+        self._t       = 0.0
+
+    def handle_event(self, event):
+        if self.back_btn.clicked(event): return "lobby"
+        if self.page == 0 and self.next_btn.clicked(event):
+            self._start_anim(1)
+        if self.page == 1 and self.prev_btn.clicked(event):
+            self._start_anim(-1)
+        return None
+
+    def update(self, dt):
+        if self._t < 1.0:
+            self._t = min(1.0, self._t + dt / self.ANIM_DUR)
+            if self._t >= 1.0:
+                self.page = self._next_pg
+
+    def _draw_page(self, surf, page_idx, ox):
+        """Draw one page of achievements at horizontal offset ox."""
+        unlocked = self.player.stats.get("achievements", [])
+        keys_all  = list(ACHIEVEMENTS.keys())
+        keys      = keys_all[page_idx * ACH_PAGE_SIZE : (page_idx+1) * ACH_PAGE_SIZE]
+        cx  = W // 2
+        col_w = 680 // 2
+        bx   = cx - 340 + ox
+        by   = self.GRID_Y
+        for i, key in enumerate(keys):
+            name, desc = ACHIEVEMENTS[key]
+            c, r = i % 2, i // 2
+            x = bx + c * (col_w + 8)
+            y = by + r * 74
+            is_on  = key in unlocked
+            bg     = (14, 40, 20) if is_on else (10, 14, 12)
+            border = GOLD if is_on else GOLD3
+            panel(surf, (x, y, col_w - 4, 64), bg, border, 2 if is_on else 1, 8)
+            check = "v  " if is_on else "o  "
+            tc    = GOLD  if is_on else GRAY
+            dc    = LGRAY if is_on else (50, 55, 50)
+            surf.blit(F_SMB.render(check + name, True, tc), (x + 12, y + 8))
+            surf.blit(F_XS.render(desc, True, dc),          (x + 12, y + 30))
+
+    @staticmethod
+    def _ease(t):
+        return 1.0 - (1.0 - t) ** 3   # easeOutCubic
+
+    def draw(self, surf):
+        draw_felt_bg(surf)
+        top_bar(surf, "ACHIEVEMENTS", self.player, self.back_btn)
+        cx = W // 2
+        t  = F_TITLE.render("ACHIEVEMENTS", True, GOLD)
+        surf.blit(t, t.get_rect(centerx=cx, centery=130))
+        pygame.draw.line(surf, GOLD3, (cx - 340, 162), (cx + 340, 162), 1)
+
+        # ── Page label ───────────────────────────────────────────────
+        keys_all  = list(ACHIEVEMENTS.keys())
+        n_pages   = (len(keys_all) + ACH_PAGE_SIZE - 1) // ACH_PAGE_SIZE
+        pg_label  = F_SM.render(f"Page {self.page + 1} / {n_pages}", True, LGRAY)
+        surf.blit(pg_label, pg_label.get_rect(centerx=cx, centery=164))
+
+        # ── Clip to grid area so slides don't bleed outside ──────────
+        clip = pygame.Rect(0, self.GRID_Y - 4, W, self.GRID_H)
+        surf.set_clip(clip)
+
+        if self._t >= 1.0:
+            # Idle — just draw current page
+            self._draw_page(surf, self.page, 0)
+        else:
+            e   = self._ease(self._t)
+            off = int(e * W)
+            # Current page slides out in the opposite direction
+            self._draw_page(surf, self.page,        -self._dir * off)
+            # Next page slides in from the correct side
+            self._draw_page(surf, self._next_pg,  self._dir * (W - off))
+
+        surf.set_clip(None)
+
+        # ── Bottom: progress + nav buttons ──────────────────────────
+        unlocked = self.player.stats.get("achievements", [])
+        n_on     = len(unlocked)
+        prog     = F_SMB.render(f"Unlocked:  {n_on} / {len(keys_all)}", True, LGRAY)
+        surf.blit(prog, prog.get_rect(centerx=cx, bottom=H - 54))
+        if self.page == 1: self.prev_btn.draw(surf)
+        if self.page == 0: self.next_btn.draw(surf)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Poker utilities
+# ─────────────────────────────────────────────────────────────────────────────
+def _poker_rank(card):
+    """Return 0-12 rank value; Ace=12 (high). card is e.g. ('A','H')."""
+    return "23456789TJQKA".index(card[0][0] if card[0] != '10' else 'T')
+
+def _eval_poker(hand):
+    """hand = list of 5 (rank_str, suit_str) tuples. Returns (score, name)."""
+    vals  = sorted([_poker_rank(c) for c in hand], reverse=True)
+    suits = [c[1] for c in hand]
+    flush    = len(set(suits)) == 1
+    straight = (vals[0]-vals[4] == 4 and len(set(vals)) == 5) or vals == [12,3,2,1,0]
+    counts   = sorted([vals.count(v) for v in set(vals)], reverse=True)
+    if flush and straight:
+        return (8 if vals[0] != 12 else 9, "Royal Flush" if vals[0] == 12 else "Straight Flush")
+    if counts == [4,1]:     return (7, "Four of a Kind")
+    if counts == [3,2]:     return (6, "Full House")
+    if flush:               return (5, "Flush")
+    if straight:            return (4, "Straight")
+    if counts == [3,1,1]:   return (3, "Three of a Kind")
+    if counts == [2,2,1]:   return (2, "Two Pair")
+    if counts == [2,1,1,1]: return (1, "One Pair")
+    return (0, "High Card")
+
+POKER_PAY = {
+    "Royal Flush":    250,
+    "Straight Flush": 80,
+    "Four of a Kind": 25,
+    "Full House":     9,
+    "Flush":          6,
+    "Straight":       4,
+    "Three of a Kind":3,
+    "Two Pair":       2,
+    "One Pair":       1,
+    "High Card":      0,
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Poker State  — 5-card draw vs dealer
+# ─────────────────────────────────────────────────────────────────────────────
+class PokerState:
+    CW, CH = 72, 104
+
+    def __init__(self, player):
+        self.player    = player
+        self.back_btn  = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
+        self.deal_btn  = Btn((W//2-65,610,130,46),"DEAL",GOLD3,GOLD,tc=BLACK,font=F_MDB)
+        self.draw_btn  = Btn((W//2-65,610,130,46),"DRAW",GOLD3,GOLD,tc=BLACK,font=F_MDB)
+        self.bet_sel   = BetSelector(W//2, 488, player)
+        self.msg       = Msg()
+        self.state     = "bet"
+        self.deck      = []
+        self.player_hand = []
+        self.dealer_hand = []
+        self.discards    = set()   # indices of player cards to discard
+        self.bet         = 10
+        self.p_score     = 0
+        self.p_name      = ""
+        self.d_score     = 0
+        self.d_name      = ""
+
+    def handle_event(self, event):
+        if self.back_btn.clicked(event):
+            return "game_over" if self.player.coins <= 0 else "lobby"
+        if self.state == "bet":
+            self.bet_sel.handle(event)
+            if self.deal_btn.clicked(event) and self.player.coins >= 10:
+                SND.play_chip(self.bet_sel.value)
+                self._deal()
+        elif self.state == "discard":
+            # Click cards to toggle discard
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for i in range(5):
+                    cr = self._player_card_rect(i)
+                    if cr.collidepoint(event.pos):
+                        if i in self.discards:
+                            self.discards.remove(i)
+                        elif len(self.discards) < 3:
+                            self.discards.add(i)
+                        SND.play("card")
+            if self.draw_btn.clicked(event):
+                self._draw()
+        elif self.state == "compare":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if self.player.coins <= 0: return "game_over"
+                self.state = "bet"
+                self.bet_sel.bet = max(10, min(self.bet_sel.bet, self.player.coins))
+        return None
+
+    def _deal(self):
+        self.bet = self.bet_sel.value
+        self.deck = [(r,s) for s in SUITS for r in RANKS]
+        random.shuffle(self.deck)
+        self.player_hand = [self.deck.pop() for _ in range(5)]
+        self.dealer_hand = [self.deck.pop() for _ in range(5)]
+        self.discards = set()
+        self.state = "discard"
+        SND.play("card")
+
+    def _player_card_rect(self, i):
+        n = 5
+        total_w = n * (self.CW + 12) - 12
+        x0 = W//2 - total_w//2
+        x = x0 + i * (self.CW + 12)
+        y = 390
+        return pygame.Rect(x, y, self.CW, self.CH)
+
+    def _dealer_card_rect(self, i):
+        n = 5
+        total_w = n * (self.CW + 12) - 12
+        x0 = W//2 - total_w//2
+        x = x0 + i * (self.CW + 12)
+        y = 140
+        return pygame.Rect(x, y, self.CW, self.CH)
+
+    def _draw(self):
+        # Replace discarded player cards
+        for i in sorted(self.discards):
+            self.player_hand[i] = self.deck.pop()
+        self.discards = set()
+        # Dealer strategy: keep pairs+, else keep 3 highest
+        d_score, _ = _eval_poker(self.dealer_hand)
+        if d_score == 0:
+            # Keep 3 highest ranked cards
+            ranked = sorted(range(5), key=lambda i: _poker_rank(self.dealer_hand[i]), reverse=True)
+            for idx in ranked[3:]:
+                self.dealer_hand[idx] = self.deck.pop()
+        # Evaluate both hands
+        self.p_score, self.p_name = _eval_poker(self.player_hand)
+        self.d_score, self.d_name = _eval_poker(self.dealer_hand)
+        self._resolve()
+
+    def _resolve(self):
+        bet = self.bet
+        cb  = self.player.coins
+        ps, pn = self.p_score, self.p_name
+        ds, dn = self.d_score, self.d_name
+        gained = 0
+        if ps > ds:
+            mult = POKER_PAY.get(pn, 0)
+            if mult > 0 and pn != "High Card":
+                gained = bet * mult
+                self.player.win(gained)
+                self.msg.show(f"{pn}!  +{gained:,} c", WINC, 3.0)
+                SND.play("win")
+                self.player.update_streak(True)
+                spawn_coins(W//2, 360, 25)
+            elif pn == "High Card":
+                # High card beats dealer but house wins
+                self.player.lose(bet)
+                self.msg.show(f"High Card — House wins  -{bet:,} c", LOSEC)
+                SND.play("lose")
+                self.player.update_streak(False)
+            else:
+                # Push (mult==0 fallback)
+                self.msg.show("Push — bet returned", GOLD)
+                SND.play("coin")
+                self.player.push()
+        elif ds > ps:
+            self.player.lose(bet)
+            self.msg.show(f"Dealer wins ({dn})  -{bet:,} c", LOSEC)
+            SND.play("lose")
+            self.player.update_streak(False)
+        else:
+            # Tie
+            self.msg.show(f"Tie — {pn} vs {dn}  Push", GOLD)
+            SND.play("coin")
+            self.player.push()
+        _check_ach(self.player, gain=gained, bet=bet, coins_before=cb)
+        if self.player.coins <= 0: self.player.coins = 0
+        self.player.record_history()
+        self.player.save()
+        self.state = "compare"
+
+    def update(self, dt):
+        self.msg.update(dt)
+
+    def draw(self, surf):
+        draw_felt_bg(surf)
+        top_bar(surf, "POKER", self.player, self.back_btn)
+
+        cx = W // 2
+        # Dealer zone label
+        dl = F_SMB.render("DEALER", True, CREAM)
+        surf.blit(dl, dl.get_rect(centerx=cx, top=110))
+        if self.state in ("discard", "compare"):
+            if self.state == "compare":
+                dn_l = F_MDB.render(self.d_name, True, GOLD)
+                surf.blit(dn_l, dn_l.get_rect(centerx=cx, top=255))
+            for i, (r,s) in enumerate(self.dealer_hand):
+                rect = self._dealer_card_rect(i)
+                hidden = self.state == "discard"
+                draw_card(surf, r, s, rect.x, rect.y, self.CW, self.CH, hidden=hidden)
+
+        # Rail
+        pygame.draw.rect(surf, (110,72,28), (0, 330, W, 10))
+
+        # Player zone label
+        pl = F_SMB.render("YOUR HAND", True, CREAM)
+        surf.blit(pl, pl.get_rect(centerx=cx, top=360))
+        if self.state == "compare":
+            pn_l = F_MDB.render(self.p_name, True, GOLD)
+            surf.blit(pn_l, pn_l.get_rect(centerx=cx, top=505))
+        if self.state in ("discard", "compare"):
+            for i, (r,s) in enumerate(self.player_hand):
+                rect = self._player_card_rect(i)
+                draw_card(surf, r, s, rect.x, rect.y, self.CW, self.CH)
+                if self.state == "discard" and i in self.discards:
+                    # Highlight selected for discard
+                    hs = pygame.Surface((self.CW, self.CH), pygame.SRCALPHA)
+                    pygame.draw.rect(hs, (255, 60, 60, 80), (0,0,self.CW,self.CH), border_radius=8)
+                    pygame.draw.rect(hs, (255, 60, 60, 200), (0,0,self.CW,self.CH), 3, border_radius=8)
+                    surf.blit(hs, (rect.x, rect.y))
+                    dis_l = F_XS.render("DISCARD", True, LOSEC)
+                    surf.blit(dis_l, dis_l.get_rect(centerx=rect.centerx, top=rect.bottom+2))
+
+        if self.state == "bet":
+            self.bet_sel.draw(surf)
+            self.deal_btn.on = self.player.coins >= 10
+            self.deal_btn.draw(surf)
+        elif self.state == "discard":
+            hint = F_SM.render(f"Click cards to discard (max 3), then DRAW  [{len(self.discards)} selected]", True, GRAY)
+            surf.blit(hint, hint.get_rect(centerx=cx, centery=572))
+            self.draw_btn.draw(surf)
+        elif self.state == "compare":
+            surf.blit(F_SM.render("Click anywhere to play again", True, GRAY),
+                      F_SM.render("Click anywhere to play again", True, GRAY).get_rect(centerx=cx, centery=572))
+
+        # Bet display
+        if self.state in ("discard", "compare") and self.bet > 0:
+            draw_chips(surf, 60, 540, self.bet)
+
+        self.msg.draw(surf, cx=cx, cy=660)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Baccarat State
+# ─────────────────────────────────────────────────────────────────────────────
+def _bac_val(rank):
+    if rank in ("J","Q","K","10"): return 0
+    if rank == "A": return 1
+    return int(rank)
+
+def _bac_total(hand):
+    return sum(_bac_val(r) for r,_ in hand) % 10
+
+class BaccaratState:
+    CW, CH = 72, 104
+
+    def __init__(self, player):
+        self.player    = player
+        self.back_btn  = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
+        self.deal_btn  = Btn((W//2-65,610,130,46),"DEAL",GOLD3,GOLD,tc=BLACK,font=F_MDB)
+        self.msg       = Msg()
+        self.bet_sel   = BetSelector(W//2, 488, player)
+        self.state     = "bet"
+        self.bet_type  = "player"   # "player","banker","tie"
+        self.bet       = 10
+        self.player_cards = []
+        self.banker_cards = []
+        self.deck      = []
+        # Bet type buttons
+        mid = W//2
+        self.bet_btns = [
+            ("player", Btn((mid-280,440,160,44),"PLAYER (1:1)", PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SMB)),
+            ("banker", Btn((mid-90, 440,170,44),"BANKER (0.95:1)",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SMB)),
+            ("tie",    Btn((mid+90, 440,130,44),"TIE (8:1)",   PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SMB)),
+        ]
+
+    def handle_event(self, event):
+        if self.back_btn.clicked(event):
+            return "game_over" if self.player.coins <= 0 else "lobby"
+        if self.state == "bet":
+            for key, btn in self.bet_btns:
+                if btn.clicked(event):
+                    self.bet_type = key
+            self.bet_sel.handle(event)
+            if self.deal_btn.clicked(event) and self.player.coins >= 10:
+                SND.play_chip(self.bet_sel.value)
+                self._deal()
+        elif self.state == "result":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if self.player.coins <= 0: return "game_over"
+                self.state = "bet"
+                self.bet_sel.bet = max(10, min(self.bet_sel.bet, self.player.coins))
+        return None
+
+    def _deal(self):
+        self.bet = self.bet_sel.value
+        self.deck = [(r,s) for s in SUITS for r in RANKS]
+        random.shuffle(self.deck)
+        # Deal alternating: P1, B1, P2, B2
+        self.player_cards = [self.deck.pop(), self.deck.pop()]
+        self.banker_cards = [self.deck.pop(), self.deck.pop()]
+        SND.play("card")
+        pt = _bac_total(self.player_cards)
+        bt = _bac_total(self.banker_cards)
+        natural = pt >= 8 or bt >= 8
+        if not natural:
+            # Player draw rule
+            if pt <= 5:
+                self.player_cards.append(self.deck.pop())
+                SND.play("card")
+            # Banker draw rule (simplified)
+            bt2 = _bac_total(self.banker_cards)
+            if bt2 <= 5:
+                self.banker_cards.append(self.deck.pop())
+                SND.play("card")
+        self._resolve()
+
+    def _resolve(self):
+        pt = _bac_total(self.player_cards)
+        bt = _bac_total(self.banker_cards)
+        bet = self.bet
+        cb  = self.player.coins
+        bet_t = self.bet_type
+        gained = 0
+        if pt > bt:
+            winner = "player"
+        elif bt > pt:
+            winner = "banker"
+        else:
+            winner = "tie"
+        if bet_t == winner:
+            if bet_t == "player":
+                gained = bet
+                self.player.win(gained)
+                self.msg.show(f"PLAYER wins {pt} vs {bt}!  +{gained:,} c", WINC)
+            elif bet_t == "banker":
+                gained = int(bet * 0.95)
+                self.player.win(gained)
+                self.msg.show(f"BANKER wins {bt} vs {pt}!  +{gained:,} c", WINC)
+            else:  # tie
+                gained = bet * 8
+                self.player.win(gained)
+                self.msg.show(f"TIE {pt}!  +{gained:,} c", WINC)
+            SND.play("win")
+            self.player.update_streak(True)
+            spawn_coins(W//2, 380, 25)
+        else:
+            self.player.lose(bet)
+            self.msg.show(f"{'PLAYER' if winner=='player' else 'BANKER' if winner=='banker' else 'TIE'} wins — you lose  -{bet:,} c", LOSEC)
+            SND.play("lose")
+            self.player.update_streak(False)
+        _check_ach(self.player, gain=gained, bet=bet, coins_before=cb)
+        if self.player.coins <= 0: self.player.coins = 0
+        self.player.record_history()
+        self.player.save()
+        self.state = "result"
+
+    def update(self, dt):
+        self.msg.update(dt)
+
+    def _draw_zone(self, surf, label, cards, cx, y):
+        lbl = F_MDB.render(label, True, CREAM)
+        surf.blit(lbl, lbl.get_rect(centerx=cx, top=y))
+        total_w = len(cards) * (self.CW + 10) - 10
+        x0 = cx - total_w // 2
+        for i, (r, s) in enumerate(cards):
+            draw_card(surf, r, s, x0 + i*(self.CW+10), y+28, self.CW, self.CH)
+        if cards:
+            tot = _bac_total(cards)
+            tot_l = F_MDB.render(str(tot), True, GOLD)
+            surf.blit(tot_l, tot_l.get_rect(centerx=cx, top=y+28+self.CH+4))
+
+    def draw(self, surf):
+        draw_felt_bg(surf)
+        top_bar(surf, "BACCARAT", self.player, self.back_btn)
+        cx = W // 2
+
+        # Draw zones
+        if self.state in ("result",):
+            self._draw_zone(surf, "PLAYER", self.player_cards, cx - 220, 130)
+            self._draw_zone(surf, "BANKER", self.banker_cards, cx + 220, 130)
+
+        # Bet type toggle buttons
+        for key, btn in self.bet_btns:
+            btn.bg = (18,60,30) if key == self.bet_type else PANELB
+            btn.tc = WINC if key == self.bet_type else GOLD
+            btn.draw(surf)
+
+        if self.state == "bet":
+            self.bet_sel.draw(surf)
+            self.deal_btn.on = self.player.coins >= 10
+            self.deal_btn.draw(surf)
+            # Show current selection
+            sel_l = F_SMB.render(f"Betting on: {self.bet_type.upper()}", True, GOLD)
+            surf.blit(sel_l, sel_l.get_rect(centerx=cx, centery=412))
+        elif self.state == "result":
+            surf.blit(F_SM.render("Click anywhere to play again", True, GRAY),
+                      F_SM.render("Click anywhere to play again", True, GRAY).get_rect(centerx=cx, centery=580))
+            draw_chips(surf, 60, 540, self.bet)
+
+        self.msg.draw(surf, cx=cx, cy=660)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scratch Card State
+# ─────────────────────────────────────────────────────────────────────────────
+SCRATCH_SYMBOLS = ["BAR","7","★","♦","♥","♣"]
+SCRATCH_PRIZE = {"BAR":50,"7":30,"★":20,"♦":10,"♥":5,"♣":2}
+
+class ScratchState:
+    CELL_W, CELL_H = 120, 80
+    COLS, ROWS = 3, 3
+    COST = 50
+
+    def __init__(self, player):
+        self.player    = player
+        self.back_btn  = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
+        self.buy_btn   = Btn((W//2-120,570,240,46),"BUY SCRATCH CARD — 50c",
+                             GOLD3,GOLD,tc=BLACK,font=F_MDB)
+        self.reveal_btn= Btn((W//2-80,570,160,40),"REVEAL ALL",
+                             PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SMB)
+        self.msg       = Msg()
+        self.state     = "idle"
+        self.grid      = []      # list of 9 symbols
+        self.revealed  = []     # list of 9 bools
+        self.reveal_t  = []     # animation timers
+
+    def _grid_cell_rect(self, i):
+        total_w = self.COLS * self.CELL_W + (self.COLS-1) * 10
+        total_h = self.ROWS * self.CELL_H + (self.ROWS-1) * 10
+        x0 = W//2 - total_w//2
+        y0 = 200
+        r2, c2 = i // self.COLS, i % self.COLS
+        x = x0 + c2 * (self.CELL_W + 10)
+        y = y0 + r2 * (self.CELL_H + 10)
+        return pygame.Rect(x, y, self.CELL_W, self.CELL_H)
+
+    def _buy_card(self):
+        if self.player.coins < self.COST:
+            return
+        self.player.coins -= self.COST
+        self.player.stats["games"] = self.player.stats.get("games", 0) + 1
+        # Generate grid: place 3 of one symbol, fill rest with others
+        win_sym = random.choice(SCRATCH_SYMBOLS)
+        positions = random.sample(range(9), 3)
+        self.grid = [random.choice([s for s in SCRATCH_SYMBOLS if s != win_sym]) for _ in range(9)]
+        for pos in positions:
+            self.grid[pos] = win_sym
+        random.shuffle(self.grid)
+        self.revealed = [False] * 9
+        self.reveal_t = [0.0] * 9
+        self.state = "scratching"
+
+    def _check_win(self):
+        # Check rows, cols, diagonals for 3 matching
+        lines = [
+            [0,1,2],[3,4,5],[6,7,8],   # rows
+            [0,3,6],[1,4,7],[2,5,8],   # cols
+            [0,4,8],[2,4,6],            # diagonals
+        ]
+        for line in lines:
+            syms = [self.grid[i] for i in line]
+            if syms[0] == syms[1] == syms[2]:
+                return syms[0]
+        return None
+
+    def handle_event(self, event):
+        if self.back_btn.clicked(event):
+            return "game_over" if self.player.coins <= 0 else "lobby"
+        if self.state == "idle":
+            if self.buy_btn.clicked(event) and self.player.coins >= self.COST:
+                self._buy_card()
+        elif self.state == "scratching":
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for i in range(9):
+                    if not self.revealed[i] and self._grid_cell_rect(i).collidepoint(event.pos):
+                        self.revealed[i] = True
+                        self.reveal_t[i] = 0.0
+                        SND.play("coin")
+                # Auto-check if all revealed
+                if all(self.revealed):
+                    self._resolve()
+            if self.reveal_btn.clicked(event):
+                for i in range(9):
+                    self.revealed[i] = True
+                self._resolve()
+        elif self.state == "done":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                self.state = "idle"
+        return None
+
+    def _resolve(self):
+        win_sym = self._check_win()
+        if win_sym:
+            prize = SCRATCH_PRIZE.get(win_sym, 0) * self.COST
+            self.player.win(prize)
+            self.msg.show(f"MATCH {win_sym}×3!  +{prize:,} c", WINC, 3.0)
+            SND.play("jackpot")
+            spawn_coins(W//2, 380, 30)
+            _check_ach(self.player, gain=prize, bet=self.COST, coins_before=self.player.coins-prize)
+        else:
+            self.msg.show("No match — better luck next time!", LOSEC)
+            SND.play("lose")
+            _check_ach(self.player, bet=self.COST, coins_before=self.player.coins)
+        self.player.record_history()
+        self.player.save()
+        self.state = "done"
+
+    def update(self, dt):
+        self.msg.update(dt)
+        for i in range(9):
+            if self.revealed[i] and self.reveal_t[i] < 1.0:
+                self.reveal_t[i] = min(1.0, self.reveal_t[i] + dt * 6)
+
+    def draw(self, surf):
+        draw_felt_bg(surf)
+        top_bar(surf, "SCRATCH CARD", self.player, self.back_btn)
+        cx = W // 2
+
+        if self.state == "idle":
+            title = F_LG.render("SCRATCH CARD", True, GOLD)
+            surf.blit(title, title.get_rect(centerx=cx, centery=300))
+            sub = F_MDB.render("Match 3 in a row, column, or diagonal to win!", True, CREAM)
+            surf.blit(sub, sub.get_rect(centerx=cx, centery=350))
+            # Prize table
+            py2 = 390
+            for i, sym in enumerate(SCRATCH_SYMBOLS):
+                mul = SCRATCH_PRIZE[sym]
+                pl = F_SM.render(f"{sym} = {mul}× ({mul*self.COST}c)", True, LGRAY)
+                surf.blit(pl, pl.get_rect(centerx=cx - 130 + (i % 3) * 130, top=py2 + (i//3)*22))
+            self.buy_btn.on = self.player.coins >= self.COST
+            self.buy_btn.draw(surf)
+        else:
+            # Draw grid
+            for i in range(9):
+                rect = self._grid_cell_rect(i)
+                if self.revealed[i]:
+                    # Fade in reveal
+                    t = self.reveal_t[i]
+                    alpha = int(255 * t)
+                    # Background
+                    pygame.draw.rect(surf, (20, 48, 28), rect, border_radius=10)
+                    pygame.draw.rect(surf, GOLD2, rect, 2, border_radius=10)
+                    # Symbol
+                    sym = self.grid[i]
+                    sym_col = GOLD if sym in ("BAR","7") else WINC if sym == "★" else BLUE if sym == "♦" else RED if sym == "♥" else (100,220,100)
+                    sl = F_LG.render(sym, True, sym_col)
+                    sl.set_alpha(alpha)
+                    surf.blit(sl, sl.get_rect(center=rect.center))
+                else:
+                    # Covered cell
+                    pygame.draw.rect(surf, (55, 65, 80), rect, border_radius=10)
+                    pygame.draw.rect(surf, GOLD3, rect, 2, border_radius=10)
+                    ql = F_MDB.render("?", True, GRAY)
+                    surf.blit(ql, ql.get_rect(center=rect.center))
+
+            if self.state == "scratching":
+                hint = F_SM.render("Click cells to reveal  or  REVEAL ALL", True, GRAY)
+                surf.blit(hint, hint.get_rect(centerx=cx, centery=560))
+                self.reveal_btn.draw(surf)
+            elif self.state == "done":
+                # Highlight winning line if any
+                win_sym = self._check_win()
+                if win_sym:
+                    lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]
+                    for line in lines:
+                        if all(self.grid[i] == win_sym for i in line):
+                            pts = [self._grid_cell_rect(i).center for i in line]
+                            pygame.draw.lines(surf, GOLD, False, pts, 4)
+                surf.blit(F_SM.render("Click anywhere to play again", True, GRAY),
+                          F_SM.render("Click anywhere to play again", True, GRAY).get_rect(centerx=cx, centery=560))
+
+        self.msg.draw(surf, cx=cx, cy=660)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Global sound manager  (created once; used everywhere via SND.play())
@@ -2711,9 +3991,15 @@ def make_state(name, player):
         "dice":      lambda: DiceState(player),
         "hilo":      lambda: HiLoState(player),
         "coinflip":  lambda: CoinFlipState(player),
-        "stats":     lambda: StatsState(player),
-        "settings":  lambda: SettingsState(player),
-        "game_over": lambda: GameOverState(player),
+        "poker":     lambda: PokerState(player),
+        "baccarat":  lambda: BaccaratState(player),
+        "scratch":   lambda: ScratchState(player),
+        "stats":        lambda: StatsState(player),
+        "settings":     lambda: SettingsState(player),
+        "game_over":    lambda: GameOverState(player),
+        "loanshark":    lambda: LoanSharkState(player),
+        "leaderboard":  lambda: LeaderboardState(player),
+        "achievements": lambda: AchievementsState(player),
     }[name]()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2747,19 +4033,21 @@ def main():
         player.save()
 
     state = make_state("game_over" if player.coins<=0 else "lobby", player)
+    SND.start_music()
     trans = Transition()
+    game_surf = pygame.Surface((W, H))
 
     while True:
         dt = clock.tick(FPS) / 1000.0
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                player.save(); SND.save(); pygame.quit(); sys.exit()
+                _lb_save(player); player.save(); SND.save(); pygame.quit(); sys.exit()
             if trans.busy:
                 continue          # block input while fading
             result = state.handle_event(event)
             if result == "quit":
-                player.save(); SND.save(); pygame.quit(); sys.exit()
+                _lb_save(player); player.save(); SND.save(); pygame.quit(); sys.exit()
             elif result is not None:
                 if result == "lobby" and player.coins <= 0:
                     trans.start("game_over")
@@ -2773,15 +4061,29 @@ def main():
                 player = run_name_input()
                 state  = make_state("lobby", player)
             elif switch == "lobby" and player.coins <= 0:
+                _lb_save(player)
                 state = make_state("game_over", player)
             else:
+                if switch == "game_over":
+                    _lb_save(player)
                 state = make_state(switch, player)
 
         state.update(dt)
         player.update(dt)
+        SHAKE.update(dt)
+        GPARTICLES[:] = [p for p in GPARTICLES if p.update(dt)]
+        ACH.update(dt)
+
+        game_surf.fill(BG)
+        state.draw(game_surf)
+        for p in GPARTICLES:
+            p.draw(game_surf)
+        ACH.draw(game_surf)
+        trans.draw(game_surf)
+
+        ox, oy = SHAKE.offset()
         screen.fill(BG)
-        state.draw(screen)
-        trans.draw(screen)
+        screen.blit(game_surf, (ox, oy))
         pygame.display.flip()
 
 

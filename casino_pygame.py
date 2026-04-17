@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Joas Casino Royale — Pygame Edition"""
+"""Casino Royale — Pygame Edition"""
 
 import pygame, random, json, sys, math, struct
 from pathlib import Path
@@ -84,7 +84,7 @@ class SoundManager:
         p2 = 2 * math.pi
         def s(f, t): return math.sin(p2 * f * t)
 
-        # Button click — soft 650 Hz tap
+        # Button click
         self._snds["click"] = _make_snd(
             lambda t, p: s(650, t) * math.exp(-t * 70) * 0.65, 0.06)
 
@@ -93,43 +93,77 @@ class SoundManager:
             lambda t, p: (s(1100,t)*0.5 + s(1650,t)*0.3 + s(550,t)*0.2)
                          * math.exp(-t * 14), 0.22)
 
-        # Card swish — white-noise burst
+        # Card swish — noise burst + tonal sweep
         self._snds["card"] = _make_snd(
-            lambda t, p: random.uniform(-1, 1) * math.exp(-t * 28) * 0.8, 0.09)
+            lambda t, p: (
+                random.uniform(-1,1) * math.exp(-t*20) * 0.65
+                + s(900-700*p, t) * math.exp(-t*28) * 0.30
+            ) * 0.90, 0.12)
 
-        # Dice rattle — noise pulses
+        # Dice — sharp crack + decelerating tumble
         self._snds["dice"] = _make_snd(
-            lambda t, p: random.uniform(-1, 1)
-                         * abs(math.sin(t * 32)) * (1 - p) ** 0.5, 0.34)
+            lambda t, p: (
+                random.uniform(-1,1) * abs(math.sin(t*(26-14*p))) * (1-p*0.55) * 0.75
+                + s(180, t) * math.exp(-t*38) * 0.45
+            ), 0.48)
 
-        # Coin-flip whoosh — noise with arc envelope
+        # Coin-flip — metallic ring harmonics + light whoosh
         self._snds["flip"] = _make_snd(
-            lambda t, p: random.uniform(-1, 1) * math.sin(math.pi * p) * 0.85, 0.44)
+            lambda t, p: (
+                s(1300,t)*math.exp(-t*2.2)*0.42
+                + s(2600,t)*math.exp(-t*3.5)*0.22
+                + s(3900,t)*math.exp(-t*5.0)*0.12
+                + random.uniform(-1,1)*math.sin(math.pi*p)*0.18
+            ) * 0.88, 1.1)
 
-        # Roulette spin whir — pitch sweep up
+        # Roulette spin — rattling whir that decelerates
         self._snds["spin"] = _make_snd(
-            lambda t, p: s(150 + 700 * p, t) * math.sin(math.pi * p) * 0.55, 0.40)
+            lambda t, p: (
+                random.uniform(-1,1) * abs(math.sin(p2*9*(1-p)**0.6*t)) * 0.68
+                + s(120+380*(1-p)**1.2, t) * (1-p) * 0.28
+            ) * (0.85 - p*0.35), 1.9)
 
-        # Small win — C E G C5 ascending arpeggio
+        # Reel stop — mechanical thud/snap
+        self._snds["reel_stop"] = _make_snd(
+            lambda t, p: (
+                s(110,t)*math.exp(-t*28)*0.55
+                + random.uniform(-1,1)*math.exp(-t*32)*0.38
+            ), 0.13)
+
+        # Reel tick — quick click as symbols scroll past
+        self._snds["tick"] = _make_snd(
+            lambda t, p: (
+                s(1400,t)*math.exp(-t*90)*0.40
+                + random.uniform(-1,1)*math.exp(-t*100)*0.20
+            ) * 0.55, 0.035)
+
+        # Small win — C E G C5 arpeggio with chord finish
         _wn = [261.63, 329.63, 392.0, 523.25]
         def _win(t, p):
-            i = min(3, int(p * 4)); lp = p * 4 - i
-            return (s(_wn[i], t) + s(_wn[i]*2, t)*0.2) * math.sin(math.pi * lp) * 0.7
-        self._snds["win"] = _make_snd(_win, 0.74)
+            i = min(3, int(p*4)); lp = p*4-i
+            base = (s(_wn[i],t) + s(_wn[i]*2,t)*0.18) * math.sin(math.pi*lp) * 0.65
+            if i == 3:
+                base += (s(329.63,t)*0.12 + s(392.0,t)*0.10) * math.exp(-lp*2.5) * 0.5
+            return base
+        self._snds["win"] = _make_snd(_win, 0.90)
 
-        # Jackpot — C E G C5 E5 G5 fast fanfare
+        # Jackpot — fast fanfare + triumphant chord finale
         _jp = [261.63, 329.63, 392.0, 523.25, 659.25, 783.99]
         def _jackpot(t, p):
-            i = min(5, int(p * 6)); lp = p * 6 - i
-            return (s(_jp[i], t)*0.7 + s(_jp[i]*2, t)*0.25) * math.sin(math.pi * lp)
-        self._snds["jackpot"] = _make_snd(_jackpot, 1.20)
+            i = min(5, int(p*6)); lp = p*6-i
+            base = (s(_jp[i],t)*0.62 + s(_jp[i]*2,t)*0.22) * math.sin(math.pi*lp)
+            if p > 0.70:
+                extra = (p-0.70)/0.30
+                base += (s(523.25,t)*0.18 + s(392.0,t)*0.14) * math.sin(math.pi*extra) * 0.7
+            return base
+        self._snds["jackpot"] = _make_snd(_jackpot, 1.55)
 
-        # Lose — G Eb C descending minor
-        _ln = [392.0, 311.13, 261.63]
+        # Lose — descending minor with added bass weight
+        _ln = [392.0, 311.13, 261.63, 220.0]
         def _lose(t, p):
-            i = min(2, int(p * 3)); lp = p * 3 - i
-            return s(_ln[i], t) * math.sin(math.pi * lp) * (1 - p * 0.4) * 0.65
-        self._snds["lose"] = _make_snd(_lose, 0.68)
+            i = min(3, int(p*4)); lp = p*4-i
+            return (s(_ln[i],t)*0.55 + s(_ln[i]*0.5,t)*0.25) * math.sin(math.pi*lp) * (1-p*0.45) * 0.72
+        self._snds["lose"] = _make_snd(_lose, 0.88)
 
     # ── persistence ───────────────────────────────────────────────────────────
     def _load(self):
@@ -531,26 +565,77 @@ class Msg:
         self.text  = ""
         self.color = WHITE
         self.timer = 0.0
+        self.pop_t = 0.4   # start fully settled
 
     def show(self, text, color=WHITE, dur=2.2):
         self.text  = text
         self.color = color
         self.timer = dur
+        self.pop_t = 0.0   # reset pop-in
 
     def update(self, dt):
         if self.timer > 0:
             self.timer -= dt
+        if self.pop_t < 0.4:
+            self.pop_t += dt
 
     def draw(self, surf, cx=W//2, cy=H-60):
         if self.timer <= 0 or not self.text:
             return
-        alpha = min(255, int(255 * min(self.timer, 0.4) / 0.4))
-        s   = F_LG.render(self.text, True, self.color)
+        alpha  = min(255, int(255 * min(self.timer, 0.4) / 0.4))
+        base   = F_LG.render(self.text, True, self.color)
+        pop_p  = min(1.0, self.pop_t / 0.22)
+        scale  = 1.0 + 0.40 * (1.0 - pop_p) ** 2
+        if scale > 1.01:
+            nw = max(1, int(base.get_width()  * scale))
+            nh = max(1, int(base.get_height() * scale))
+            s  = pygame.transform.smoothscale(base, (nw, nh))
+        else:
+            s = base
         tmp = pygame.Surface(s.get_size(), pygame.SRCALPHA)
-        tmp.fill((0,0,0,0))
-        tmp.blit(s,(0,0))
+        tmp.fill((0, 0, 0, 0))
+        tmp.blit(s, (0, 0))
         tmp.set_alpha(alpha)
         surf.blit(tmp, tmp.get_rect(centerx=cx, centery=cy))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Win particles  — spinning gold coins that burst out on wins
+# ─────────────────────────────────────────────────────────────────────────────
+class Particle:
+    _COLORS = [GOLD, GOLD2, (255, 230, 60), (255, 200, 10), (240, 178, 20)]
+
+    def __init__(self, x, y):
+        ang        = random.uniform(-math.pi, 0)
+        speed      = random.uniform(90, 340)
+        self.x     = float(x)
+        self.y     = float(y)
+        self.vx    = math.cos(ang) * speed * random.uniform(0.6, 1.4)
+        self.vy    = math.sin(ang) * speed
+        self.color = random.choice(self._COLORS)
+        self.life  = random.uniform(0.65, 1.35)
+        self.maxl  = self.life
+        self.r     = random.randint(5, 10)
+        self.spin  = random.uniform(-9, 9)
+        self.phase = random.uniform(0, math.pi)
+
+    def update(self, dt):
+        self.x    += self.vx * dt
+        self.y    += self.vy * dt
+        self.vy   += 650 * dt
+        self.vx   *= (1 - 1.2 * dt)
+        self.life -= dt
+        self.phase += self.spin * dt
+        return self.life > 0
+
+    def draw(self, surf):
+        alpha  = max(0, int(255 * self.life / self.maxl))
+        squish = abs(math.cos(self.phase))
+        cw     = max(2, int(self.r * 2 * squish))
+        ch     = self.r * 2
+        ps     = pygame.Surface((cw + 2, ch + 2), pygame.SRCALPHA)
+        pygame.draw.ellipse(ps, (*self.color, alpha), (1, 1, max(1, cw), ch))
+        surf.blit(ps, (int(self.x) - cw // 2 - 1, int(self.y) - ch // 2 - 1))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Volume Slider
@@ -624,13 +709,16 @@ REEL_H = SYM_H * 3
 
 class SlotReel:
     def __init__(self):
-        self.symbols  = random.choices(S_NAMES, weights=S_WEIGHTS, k=30)
-        self.offset   = 0.0
-        self.speed    = 0.0
-        self.spinning = False
-        self.stopped  = True
-        self.stop_ms  = 0
-        self.target   = None
+        self.symbols      = random.choices(S_NAMES, weights=S_WEIGHTS, k=30)
+        self.offset       = 0.0
+        self.speed        = 0.0
+        self.spinning     = False
+        self.stopped      = True
+        self.stop_ms      = 0
+        self.target       = None
+        self.bounce_t     = 0.0
+        self.bounce_amp   = 0.0
+        self.just_stopped = False
 
     def spin(self, target_sym, stop_ms):
         self.target   = target_sym
@@ -642,14 +730,21 @@ class SlotReel:
         self.offset   = 0.0
 
     def update(self, dt):
+        if self.bounce_amp > 0:
+            self.bounce_t  += dt
+            self.bounce_amp = max(0.0, 10.0 * math.exp(-self.bounce_t * 18)
+                                       * abs(math.cos(self.bounce_t * 22)))
         if not self.spinning: return
         self.offset += self.speed * dt
         if pygame.time.get_ticks() >= self.stop_ms:
             ci = (int(self.offset / SYM_H) + 1) % len(self.symbols)
-            self.symbols[ci] = self.target
-            self.offset   = int(self.offset / SYM_H) * float(SYM_H)
-            self.spinning = False
-            self.stopped  = True
+            self.symbols[ci]  = self.target
+            self.offset       = int(self.offset / SYM_H) * float(SYM_H)
+            self.spinning     = False
+            self.stopped      = True
+            self.bounce_t     = 0.0
+            self.bounce_amp   = 10.0
+            self.just_stopped = True
 
     def center_sym(self):
         return self.symbols[(int(self.offset / SYM_H) + 1) % len(self.symbols)]
@@ -677,7 +772,7 @@ class SlotReel:
             ly   = ry + SYM_H//2 - lbl.get_height()//2
             rsurf.blit(lbl, (lx+1, ly+1))
             rsurf.blit(F_MDB.render(sym, True, WHITE), (lx, ly))
-        surf.blit(rsurf, (x, y))
+        surf.blit(rsurf, (x, y + int(self.bounce_amp)))
         pygame.draw.rect(surf, (40,44,54), (x, y, REEL_W, REEL_H), 3, border_radius=5)
         # Payline window highlight
         cy_win = y + SYM_H
@@ -949,16 +1044,20 @@ class SlotsState:
         self.player      = player
         self.reels       = [SlotReel() for _ in range(3)]
         self.msg         = Msg()
-        self.bet_sel     = BetSelector(_M_CX, 428, player)
+        self.bet_sel     = BetSelector(_M_CX, 448, player)
         self.back_btn    = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
         self.state       = "idle"
         self.result      = []
         self._bet_placed = 0
-        self._win_flash  = 0.0   # seconds of payline glow remaining
-        # Lever animation
-        self.lever_y     = 0.0   # 0=up, 1=down
-        self.lever_anim  = "idle"
-        self.lever_t     = 0.0
+        self._win_flash    = 0.0
+        self._particles    = []
+        self._flash_t      = 0.0
+        self._tick_timer   = 0.0
+        # Lever
+        self.lever_y       = 0.0   # 0=up, 1=down
+        self.lever_anim    = "idle"
+        self.lever_t       = 0.0
+        self._lever_grabbed = False
 
     # ── lever helpers ──────────────────────────────────────────────────────────
     def _lever_ball_pos(self):
@@ -968,34 +1067,45 @@ class SlotsState:
     def _can_spin(self):
         return self.player.coins >= self.bet_sel.value and self.player.coins >= 10
 
-    def _pull_and_spin(self):
-        self.lever_anim = "pulling"
-        self.lever_t    = 0.0
+    def _trigger_spin(self):
         SND.play("spin")
         self._do_spin()
+        self.lever_anim = "returning"
+        self.lever_t    = 0.0
 
     # ── handle ────────────────────────────────────────────────────────────────
     def handle_event(self, event):
         if self.back_btn.clicked(event):
             return "game_over" if self.player.coins <= 0 else "lobby"
 
-        lever_clicked = False
+        # Grab lever on mouse-down near the ball
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             bx, by = self._lever_ball_pos()
-            if math.hypot(event.pos[0]-bx, event.pos[1]-by) <= _LEV_R + 14:
-                lever_clicked = True
+            if (math.hypot(event.pos[0]-bx, event.pos[1]-by) <= _LEV_R + 20
+                    and self.state in ("idle", "result")
+                    and self._can_spin()):
+                self._lever_grabbed = True
+
+        # Release lever
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self._lever_grabbed:
+                self._lever_grabbed = False
+                if self.lever_y >= 0.92:
+                    if self.state == "result":
+                        self.state = "idle"
+                    self._trigger_spin()
+                else:
+                    self.lever_anim = "returning"
 
         if self.state == "idle":
-            self.bet_sel.handle(event)
-            if lever_clicked and self._can_spin():
-                self._pull_and_spin()
+            if not self._lever_grabbed:
+                self.bet_sel.handle(event)
         elif self.state == "result":
-            if event.type == pygame.MOUSEBUTTONDOWN:
+            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                    and not self._lever_grabbed):
                 if self.player.coins <= 0:
                     return "game_over"
                 self.state = "idle"
-                if lever_clicked and self._can_spin():
-                    self._pull_and_spin()
         return None
 
     def _do_spin(self):
@@ -1009,20 +1119,43 @@ class SlotsState:
     def update(self, dt):
         self.msg.update(dt)
         self._win_flash = max(0.0, self._win_flash - dt)
-        for r in self.reels: r.update(dt)
+        self._flash_t   = max(0.0, self._flash_t - dt)
+        for r in self.reels:
+            r.update(dt)
+            if r.just_stopped:
+                SND.play("reel_stop")
+                r.just_stopped = False
+        self._particles = [p for p in self._particles if p.update(dt)]
         if self.state == "spinning" and all(r.stopped for r in self.reels):
             self._resolve()
-        # Lever physics
-        if self.lever_anim == "pulling":
-            self.lever_t += dt
-            self.lever_y  = min(1.0, self.lever_t / 0.22)
-            if self.lever_y >= 1.0:
-                self.lever_anim = "returning"
-                self.lever_t    = 0.0
+
+        # Reel tick sounds while spinning
+        if self.state == "spinning":
+            n_still = sum(1 for r in self.reels if r.spinning)
+            interval = 0.07 + 0.04 * max(0, 3 - n_still)
+            self._tick_timer -= dt
+            if self._tick_timer <= 0:
+                SND.play("tick")
+                self._tick_timer = interval
+        else:
+            self._tick_timer = 0.0
+
+        # Lever drag: track mouse while button is held
+        if self._lever_grabbed:
+            my = pygame.mouse.get_pos()[1]
+            raw = (my - _LEV_UP_Y) / (_LEV_DOWN_Y - _LEV_UP_Y)
+            self.lever_y = max(0.0, min(1.0, raw))
+            # Auto-trigger when dragged all the way down
+            if self.lever_y >= 1.0 and self.state in ("idle", "result"):
+                self._lever_grabbed = False
+                if self.state == "result":
+                    self.state = "idle"
+                self._trigger_spin()
         elif self.lever_anim == "returning":
-            self.lever_t += dt
-            self.lever_y  = max(0.0, 1.0 - self.lever_t / 0.5)
-            if self.lever_y <= 0.0:
+            # Spring-back: accelerates as it returns to top
+            self.lever_y = max(0.0, self.lever_y - dt * (2.0 + self.lever_y * 7.0))
+            if self.lever_y < 0.01:
+                self.lever_y    = 0.0
                 self.lever_anim = "idle"
 
     def _resolve(self):
@@ -1034,11 +1167,16 @@ class SlotsState:
             self.msg.show(f"JACKPOT!  {a} x3  +{gain:,} c", WINC, 3.5)
             SND.play("jackpot")
             self._win_flash = 2.5
+            self._flash_t   = 0.28
+            for _ in range(80):
+                self._particles.append(Particle(_M_CX + random.randint(-220, 220), 300))
         elif a == b or b == c or a == c:
             self.player.push()
             self.msg.show("Two matching — push!  Bet returned.", GOLD)
             SND.play("coin")
             self._win_flash = 1.0
+            for _ in range(28):
+                self._particles.append(Particle(_M_CX + random.randint(-80, 80), 340))
         else:
             self.player.lose(bet)
             self.msg.show(f"No match  —  -{bet:,} c", LOSEC)
@@ -1184,12 +1322,17 @@ class SlotsState:
             pygame.draw.circle(surf,(240,120,120),(bx-6,by-7),_LEV_R//3)
         pygame.draw.circle(surf,bc2,(bx,by),_LEV_R,2)
 
-        # PULL hint
-        if self.lever_anim == "idle" and self.state == "idle":
+        # HOLD & PULL hint
+        if self.lever_anim == "idle" and self.state == "idle" and not self._lever_grabbed:
             pulse = abs(math.sin(pygame.time.get_ticks()*0.003))
             hc = (int(180+75*pulse),int(140+60*pulse),0)
-            ht = F_XS.render("PULL", True, hc)
+            ht = F_XS.render("HOLD & PULL", True, hc)
             surf.blit(ht, ht.get_rect(centerx=bx,top=by+_LEV_R+6))
+        elif self._lever_grabbed:
+            pct = int(self.lever_y * 100)
+            hc2 = (int(100+155*(self.lever_y)), int(200-150*(self.lever_y)), 0)
+            ht2 = F_XS.render(f"{'RELEASE!' if self.lever_y>=0.92 else f'{pct}%'}", True, hc2)
+            surf.blit(ht2, ht2.get_rect(centerx=bx, top=by+_LEV_R+6))
 
     def draw(self, surf):
         surf.fill((8,20,12))
@@ -1209,14 +1352,21 @@ class SlotsState:
         if self.state == "idle":
             self.bet_sel.draw(surf)
             hint = F_SM.render("Click the lever  ──▶  to spin!", True, GRAY)
-            surf.blit(hint, hint.get_rect(centerx=_M_CX, top=562))
+            surf.blit(hint, hint.get_rect(centerx=_M_CX, top=576))
         elif self.state == "spinning":
             s = F_LG.render("Spinning...", True, GOLD)
-            surf.blit(s, s.get_rect(centerx=_M_CX, centery=500))
+            surf.blit(s, s.get_rect(centerx=_M_CX, centery=512))
         elif self.state == "result":
             self.bet_sel.draw(surf)
             s = F_SM.render("Pull lever or click to spin again", True, GRAY)
-            surf.blit(s, s.get_rect(centerx=_M_CX, top=562))
+            surf.blit(s, s.get_rect(centerx=_M_CX, top=576))
+        for p in self._particles:
+            p.draw(surf)
+        if self._flash_t > 0:
+            fa  = int(200 * (self._flash_t / 0.28))
+            fov = pygame.Surface((W, H), pygame.SRCALPHA)
+            fov.fill((255, 255, 200, min(200, fa)))
+            surf.blit(fov, (0, 0))
         self.msg.draw(surf, cx=_M_CX, cy=600)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1487,7 +1637,7 @@ class BlackjackState:
                       F_SM.render("Click anywhere to play again", True, GRAY)
                       .get_rect(centerx=cx, centery=672))
 
-        self.msg.draw(surf, cx=cx, cy=488)
+        self.msg.draw(surf, cx=cx, cy=660)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Roulette  — left panel betting UI + right-side spinning wheel
@@ -1508,10 +1658,10 @@ class RouletteState:
         self.player    = player
         self.back_btn  = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
         # Spin button in left panel
-        self.spin_btn  = Btn((210, 606, 160, 44), "SPIN",
+        self.spin_btn  = Btn((220, 592, 160, 44), "SPIN",
                              GOLD3, GOLD, tc=BLACK, font=F_MDB)
         # BetSelector left-panel-centred
-        self.bet_sel   = BetSelector(300, 462, player)
+        self.bet_sel   = BetSelector(300, 468, player)
         self.msg       = Msg()
         self.state     = "pick"
         self.sel_type  = None
@@ -1523,23 +1673,24 @@ class RouletteState:
         self.wheel_angle   = 0.0
         self.ball_angle    = 0.0
         self.ball_vis      = False
-        # Settling phase (ball eases into pocket after wheel stops)
+        # Settling phase
         self.settle_t      = 0.0
         self.settle_start  = 0.0
         self.settle_target = 0.0
+        self.settle_dur    = 1.2
 
         self.type_btns = []
         for i,(key,label,pays) in enumerate(ROUL_BETS):
             col=i%2; row=i//2
-            x=28+col*282; y=86+row*46
+            x=28+col*282; y=82+row*40
             self.type_btns.append((key,
-                Btn((x,y,268,38),label,PANELB,GOLD2,tc=LGRAY,border=GOLD3,font=F_SM)))
+                Btn((x,y,268,34),label,PANELB,GOLD2,tc=LGRAY,border=GOLD3,font=F_SM)))
 
         self.num_btns = []
         for n in range(37):
-            nc=n%6; nr=n//6
-            x=28+nc*54; y=388+nr*44
-            self.num_btns.append(Btn((x,y,48,36),str(n),
+            nc=n%13; nr=n//13
+            x=20+nc*44; y=338+nr*36
+            self.num_btns.append(Btn((x,y,40,30),str(n),
                 bg=ROULRED if n in RED_NUMS else (PANEL if n>0 else DARKGRN),
                 hover=GOLD2,tc=WHITE,font=F_SMB,border=GOLD3))
 
@@ -1574,21 +1725,20 @@ class RouletteState:
         self.msg.update(dt)
         if self.state == "spinning":
             self.spin_anim += dt
-            # Wheel decelerates to nearly-stop over ~2 s
             wheel_spd = max(0.0, 12.0 * math.exp(-self.spin_anim * 2.1))
-            # Ball slightly faster; also decelerates
             ball_spd  = max(0.0, 18.0 * math.exp(-self.spin_anim * 1.55))
             self.wheel_angle -= wheel_spd * dt
             self.ball_angle  += ball_spd  * dt
-            if self.spin_anim >= 2.3:
+            # Start settling once ball speed drops to ~3 rad/s (still visibly moving)
+            if ball_spd <= 3.2 and self.spin_anim >= 0.5:
                 self._start_settling()
 
         elif self.state == "settling":
             self.settle_t += dt
-            progress = min(1.0, self.settle_t / 1.1)
-            # Ease-out cubic: fast start, smooth stop
-            t = 1.0 - (1.0 - progress) ** 3
-            self.ball_angle = self.settle_start + (self.settle_target - self.settle_start) * t
+            progress = min(1.0, self.settle_t / self.settle_dur)
+            # Quadratic ease-out: initial speed matches spinning hand-off velocity
+            ease = progress * (2.0 - progress)
+            self.ball_angle = self.settle_start + (self.settle_target - self.settle_start) * ease
             if progress >= 1.0:
                 self._resolve()
 
@@ -1597,10 +1747,13 @@ class RouletteState:
             self.wheel_angle -= 0.35 * dt
 
     def _start_settling(self):
-        """Freeze the wheel and compute the target pocket angle for the ball."""
-        self.state     = "settling"
-        self.settle_t  = 0.0
+        """Freeze wheel; compute pocket target with velocity-matched deceleration."""
+        self.state        = "settling"
+        self.settle_t     = 0.0
         self.settle_start = self.ball_angle
+
+        # Ball speed at this exact moment — used to set initial settling speed
+        v0 = max(0.1, 18.0 * math.exp(-self.spin_anim * 1.55))
 
         n_pockets = len(WHEEL_NUMS)
         seg = 2.0 * math.pi / n_pockets
@@ -1609,17 +1762,30 @@ class RouletteState:
         except ValueError:
             idx = 0
 
-        # Centre of the result pocket in current screen coordinates.
-        # wheel_angle is now frozen, so this position won't move.
         pocket_screen = idx * seg + self.wheel_angle - math.pi / 2 + seg * 0.5
 
-        # Always travel *forward* (ball_angle increases).
-        diff = (pocket_screen - self.settle_start) % (2.0 * math.pi)
-        # If the pocket is already very close (< 90°) the ball just grazed it;
-        # add one more full rotation so the deceleration looks natural.
-        if diff < math.pi / 2:
-            diff += 2.0 * math.pi
+        # Minimum forward travel to reach the pocket
+        base_diff = (pocket_screen - self.settle_start) % (2.0 * math.pi)
+        if base_diff < 0.25:          # nearly grazed it — add a full lap
+            base_diff += 2.0 * math.pi
 
+        # With quadratic ease-out (p*(2-p)), distance = v0 * T / 2
+        # → T = 2 * diff / v0.  Clamp T to [0.8, 2.8] s.
+        T_MIN, T_MAX = 0.8, 2.8
+        min_diff = v0 * T_MIN / 2
+        max_diff = v0 * T_MAX / 2
+
+        diff = base_diff
+        # Add full laps until diff is at least min_diff (looks natural)
+        while diff < min_diff:
+            diff += 2.0 * math.pi
+        # If still over max, clamp T and let the ball overshoot by <2π
+        if diff > max_diff:
+            diff = base_diff
+            while diff < min_diff:
+                diff += 2.0 * math.pi
+
+        self.settle_dur    = max(T_MIN, min(T_MAX, 2.0 * diff / v0))
         self.settle_target = self.settle_start + diff
 
     def _resolve(self):
@@ -1661,7 +1827,7 @@ class RouletteState:
             btn.draw(surf)
 
         if self.state in ("pick_num","bet") and self.sel_type=="number":
-            panel(surf,(18,378,370,272),PANELB,GOLD3,1)
+            panel(surf,(12,326,576,126),PANELB,GOLD3,1)
             for n,btn in enumerate(self.num_btns):
                 btn.bw=2 if n==self.pick_num else 1
                 btn.border=GOLD if n==self.pick_num else GOLD3
@@ -1671,10 +1837,10 @@ class RouletteState:
             if self.sel_type:
                 info=next((l for k,l,_ in ROUL_BETS if k==self.sel_type),"")
                 s=F_SMB.render(f"Bet on:  {info}",True,GOLD)
-                surf.blit(s, s.get_rect(left=28,top=314))
+                surf.blit(s, s.get_rect(left=28,top=282))
                 if self.sel_type=="number":
                     surf.blit(F_MDB.render(f"Number:  {self.pick_num}",True,CREAM),
-                              (28,338))
+                              (28,304))
             self.bet_sel.draw(surf)
             self.spin_btn.on=self.player.coins>=10
             self.spin_btn.draw(surf)
@@ -1729,21 +1895,23 @@ class DiceState:
     def __init__(self, player):
         self.player   = player
         self.back_btn = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
-        self.roll_btn = Btn((W//2-70,612,140,46),"ROLL DICE",GOLD3,GOLD,tc=BLACK,font=F_MDB)
-        self.bet_sel  = BetSelector(W//2, 470, player)
+        self.roll_btn = Btn((W//2-70,622,140,46),"ROLL DICE",GOLD3,GOLD,tc=BLACK,font=F_MDB)
+        self.bet_sel  = BetSelector(W//2, 480, player)
         self.msg      = Msg()
         self.state    = "pick"
         self.sel      = None
         self.d1=self.d2=1
         self.anim_t=0.0; self.anim_d1=1; self.anim_d2=1
-        self.cup_tilt = 0.0  # 0=upright, 1=fully tipped
+        self.cup_tilt      = 0.0  # 0=upright, 1=fully tipped
+        self.dice_bounce_t = 0.0
+        self.dice_bounce_y = 0.0
 
         self.bet_btns=[]
         for i,(key,label,pays) in enumerate(DICE_BETS_DEF):
             col=i%2; row=i//2
-            x=W//2-300+col*308; y=86+row*68
+            x=W//2-300+col*308; y=82+row*66
             self.bet_btns.append((key,
-                Btn((x,y,292,56),f"{label}   pays {pays}:1",
+                Btn((x,y,292,54),f"{label}   pays {pays}:1",
                     PANELB,GOLD2,tc=LGRAY,border=GOLD3,font=F_SM)))
 
     def handle_event(self, event):
@@ -1767,6 +1935,10 @@ class DiceState:
 
     def update(self, dt):
         self.msg.update(dt)
+        if self.dice_bounce_y > 0:
+            self.dice_bounce_t += dt
+            self.dice_bounce_y  = max(0.0, 28.0 * math.exp(-self.dice_bounce_t * 14)
+                                          * abs(math.cos(self.dice_bounce_t * 18)))
         if self.state=="rolling":
             self.anim_t+=dt
             self.anim_d1=random.randint(1,6); self.anim_d2=random.randint(1,6)
@@ -1793,7 +1965,10 @@ class DiceState:
             self.msg.show(f"LOSE  {d1}+{d2}={total}  -{bet:,} c",LOSEC)
             SND.play("lose")
         if self.player.coins<=0: self.player.coins=0
-        self.player.save(); self.state="result"
+        self.player.save()
+        self.state         = "result"
+        self.dice_bounce_t = 0.0
+        self.dice_bounce_y = 28.0
 
     def _draw_cup(self, surf, cx, cy, tilt):
         """Draw a dice shaker cup that tips from upright to 90°."""
@@ -1845,7 +2020,7 @@ class DiceState:
             btn.draw(surf)
 
         # Cup and dice area
-        cup_cx, cup_cy = W//2, 348
+        cup_cx, cup_cy = W//2, 370
         dice_y = cup_cy - 40
 
         if self.state == "bet" and self.sel:
@@ -1867,8 +2042,9 @@ class DiceState:
                 draw_die(surf,self.anim_d2,W//2+38+shake, dice_y,92)
 
         elif self.state == "result":
-            draw_die(surf,self.d1,W//2-130,dice_y,92)
-            draw_die(surf,self.d2,W//2+38, dice_y,92)
+            by_off = int(self.dice_bounce_y)
+            draw_die(surf,self.d1,W//2-130,dice_y + by_off,92)
+            draw_die(surf,self.d2,W//2+38, dice_y + by_off,92)
             total=self.d1+self.d2
             surf.blit(F_LG.render(f"Sum:  {total}",True,GOLD),
                       F_LG.render(f"Sum:  {total}",True,GOLD).get_rect(centerx=W//2,top=dice_y+100))
@@ -1881,7 +2057,7 @@ class DiceState:
             self.roll_btn.draw(surf)
         elif self.state == "rolling":
             surf.blit(F_MDB.render("Shaking...",True,GOLD),
-                      F_MDB.render("Shaking...",True,GOLD).get_rect(centerx=W//2,centery=460))
+                      F_MDB.render("Shaking...",True,GOLD).get_rect(centerx=W//2,centery=474))
         self.msg.draw(surf,cx=W//2,cy=672)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1994,7 +2170,7 @@ class HiLoState:
             surf.blit(F_SM.render("Click anywhere to play again",True,GRAY),
                       F_SM.render("Click anywhere to play again",True,GRAY).get_rect(centerx=W//2,top=670))
 
-        self.msg.draw(surf,cx=W//2,cy=480)
+        self.msg.draw(surf,cx=W//2,cy=660)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Coin Flip  — pedestal + arc-trajectory coin
@@ -2003,9 +2179,9 @@ class CoinFlipState:
     def __init__(self, player):
         self.player    = player
         self.back_btn  = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
-        self.heads_btn = Btn((W//2-240,490,220,60),"HEADS",GOLD3,GOLD,    tc=BLACK,border=GOLD, font=F_LG)
-        self.tails_btn = Btn((W//2+20, 490,220,60),"TAILS",PANELB,GOLD2, tc=GOLD, border=GOLD, font=F_LG)
-        self.bet_sel   = BetSelector(W//2, 568, player)
+        self.heads_btn = Btn((W//2-240,480,220,54),"HEADS",GOLD3,GOLD,    tc=BLACK,border=GOLD, font=F_LG)
+        self.tails_btn = Btn((W//2+20, 480,220,54),"TAILS",PANELB,GOLD2, tc=GOLD, border=GOLD, font=F_LG)
+        self.bet_sel   = BetSelector(W//2, 550, player)
         self.msg       = Msg()
         self.state     = "pick"
         self.choice=self.result=None
@@ -2276,6 +2452,53 @@ class GameOverState:
 SND = SoundManager()
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Screen transition  — fade-to-black between every state change
+# ─────────────────────────────────────────────────────────────────────────────
+class Transition:
+    FADE_OUT = 0.20   # seconds to go black
+    FADE_IN  = 0.26   # seconds to clear from black
+
+    def __init__(self):
+        self.phase   = "idle"   # "out" | "in" | "idle"
+        self._t      = 0.0
+        self.pending = None
+        self._surf   = pygame.Surface((W, H))
+        self._surf.fill((0, 0, 0))
+
+    @property
+    def busy(self):
+        return self.phase != "idle"
+
+    def start(self, result):
+        if self.phase == "idle":          # don't interrupt an ongoing fade
+            self.phase   = "out"
+            self._t      = 0.0
+            self.pending = result
+
+    def update(self, dt):
+        if self.phase == "idle":
+            return None
+        self._t += dt
+        if self.phase == "out" and self._t >= self.FADE_OUT:
+            self.phase = "in"
+            self._t    = 0.0
+            return self.pending           # caller creates new state NOW
+        if self.phase == "in" and self._t >= self.FADE_IN:
+            self.phase = "idle"
+        return None
+
+    def draw(self, surf):
+        if self.phase == "idle":
+            return
+        if self.phase == "out":
+            a = int(255 * min(1.0, self._t / self.FADE_OUT))
+        else:
+            a = int(255 * max(0.0, 1.0 - self._t / self.FADE_IN))
+        self._surf.set_alpha(a)
+        surf.blit(self._surf, (0, 0))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # State factory
 # ─────────────────────────────────────────────────────────────────────────────
 def make_state(name, player):
@@ -2322,27 +2545,42 @@ def main():
         player.stats["sessions"]=player.stats.get("sessions",0)+1
         player.save()
 
-    state=make_state("game_over" if player.coins<=0 else "lobby",player)
+    state = make_state("game_over" if player.coins<=0 else "lobby", player)
+    trans = Transition()
 
     while True:
-        dt=clock.tick(FPS)/1000.0
+        dt = clock.tick(FPS) / 1000.0
+
         for event in pygame.event.get():
-            if event.type==pygame.QUIT:
+            if event.type == pygame.QUIT:
                 player.save(); pygame.quit(); sys.exit()
-            result=state.handle_event(event)
-            if result=="quit":
+            if trans.busy:
+                continue          # block input while fading
+            result = state.handle_event(event)
+            if result == "quit":
                 player.save(); pygame.quit(); sys.exit()
-            elif result=="restart":
-                if SAVE_FILE.exists(): SAVE_FILE.unlink()
-                player=run_name_input()
-                state=make_state("lobby",player)
-            elif result=="lobby" and player.coins<=0:
-                state=make_state("game_over",player)
             elif result is not None:
-                state=make_state(result,player)
+                if result == "lobby" and player.coins <= 0:
+                    trans.start("game_over")
+                else:
+                    trans.start(result)
+
+        switch = trans.update(dt)
+        if switch is not None:
+            if switch == "restart":
+                if SAVE_FILE.exists(): SAVE_FILE.unlink()
+                player = run_name_input()
+                state  = make_state("lobby", player)
+            elif switch == "lobby" and player.coins <= 0:
+                state = make_state("game_over", player)
+            else:
+                state = make_state(switch, player)
 
         state.update(dt)
-        screen.fill(BG); state.draw(screen); pygame.display.flip()
+        screen.fill(BG)
+        state.draw(screen)
+        trans.draw(screen)
+        pygame.display.flip()
 
 
 if __name__=="__main__":

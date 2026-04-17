@@ -20,37 +20,37 @@ SAVE_FILE      = Path.home() / ".casino_royale_pg.json"
 STARTING_COINS = 1_000
 
 # ── Colors ────────────────────────────────────────────────────────────────────
-BG      = (10,  32,  20)
-FELT    = (20,  65,  40)
-PANEL   = (7,   18,  11)
-PANELB  = (14,  36,  22)
-GOLD    = (255, 215, 0)
-GOLD2   = (200, 160, 0)
-GOLD3   = (140, 100, 0)
-WHITE   = (255, 255, 255)
-CREAM   = (255, 248, 220)
-RED     = (210, 40,  40)
-DKRED   = (140, 20,  20)
-BLACK   = (15,  15,  15)
-GRAY    = (120, 120, 120)
-LGRAY   = (190, 190, 190)
-WINC    = (50,  210, 85)
-LOSEC   = (210, 50,  50)
-BLUE    = (60,  130, 220)
-DKBLUE  = (30,  60,  150)
-ROULRED = (200, 40,  40)
-DARKGRN = (10,  90,  30)
+BG      = (12,  18,  30)
+FELT    = (22,  36,  54)
+PANEL   = (18,  26,  38)
+PANELB  = (28,  38,  54)
+GOLD    = (88,  204, 255)
+GOLD2   = (64,  140, 215)
+GOLD3   = (45,   95, 155)
+WHITE   = (238, 243, 248)
+CREAM   = (220, 230, 240)
+RED     = (240, 110, 110)
+DKRED   = (170,  55,  55)
+BLACK   = (18,  24,  34)
+GRAY    = (120, 135, 150)
+LGRAY   = (175, 190, 205)
+WINC    = (70, 220, 145)
+LOSEC   = (230,  90,  90)
+BLUE    = (75, 145, 255)
+DKBLUE  = (40,  65, 125)
+ROULRED = (220,  90,  90)
+DARKGRN = (15,  95,  60)
 
 # ── Fonts ─────────────────────────────────────────────────────────────────────
 _f      = "arial"
-F_TITLE = pygame.font.SysFont(_f, 56, bold=True)
-F_LG    = pygame.font.SysFont(_f, 34, bold=True)
+F_TITLE = pygame.font.SysFont(_f, 64, bold=True)
+F_LG    = pygame.font.SysFont(_f, 36, bold=True)
 F_MDB   = pygame.font.SysFont(_f, 22, bold=True)
-F_MD    = pygame.font.SysFont(_f, 22)
-F_SM    = pygame.font.SysFont(_f, 17)
-F_SMB   = pygame.font.SysFont(_f, 17, bold=True)
+F_MD    = pygame.font.SysFont(_f, 18)
+F_SM    = pygame.font.SysFont(_f, 16)
+F_SMB   = pygame.font.SysFont(_f, 16, bold=True)
 F_XS    = pygame.font.SysFont(_f, 13)
-F_HUGE  = pygame.font.SysFont(_f, 72, bold=True)
+F_HUGE  = pygame.font.SysFont(_f, 76, bold=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sound system  (all sounds generated procedurally — no audio files needed)
@@ -72,6 +72,7 @@ class SoundManager:
     def __init__(self):
         self.master = 0.7
         self.sfx    = 1.0
+        self.card_back = 0
         self._snds  = {}
         try:
             self._build()
@@ -170,15 +171,19 @@ class SoundManager:
         try:
             if self._SETTINGS.exists():
                 d = json.loads(self._SETTINGS.read_text())
-                self.master = float(d.get("master", 0.7))
-                self.sfx    = float(d.get("sfx",    1.0))
+                self.master    = float(d.get("master", 0.7))
+                self.sfx       = float(d.get("sfx",    1.0))
+                self.card_back = int(d.get("card_back", 0))
+                self.card_back = max(0, min(len(CARD_BACK_STYLE_NAMES) - 1, self.card_back))
         except Exception:
             pass
 
     def save(self):
         try:
             self._SETTINGS.write_text(
-                json.dumps({"master": self.master, "sfx": self.sfx}, indent=2))
+                json.dumps({"master": self.master,
+                            "sfx": self.sfx,
+                            "card_back": self.card_back}, indent=2))
         except Exception:
             pass
 
@@ -209,6 +214,7 @@ SUITS    = ["S","C","H","D"]
 RANKS    = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
 RED_S    = {"H","D"}
 SUIT_SYM = {"S":"♠","C":"♣","H":"♥","D":"♦"}
+CARD_BACK_STYLE_NAMES = ["Classic", "Diamonds", "Stripes", "Dots", "Checkerboard"]
 
 # ── Roulette ──────────────────────────────────────────────────────────────────
 RED_NUMS    = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
@@ -242,6 +248,7 @@ class Player:
     def __init__(self, name, coins=STARTING_COINS):
         self.name  = name
         self.coins = coins
+        self.display_coins = float(coins)
         self.stats = {"games":0,"won":0,"lost":0,"biggest_win":0,"sessions":0}
 
     def win(self, amount):
@@ -259,6 +266,16 @@ class Player:
     def push(self):
         self.stats["games"] += 1
 
+    def update(self, dt):
+        if self.display_coins != self.coins:
+            diff = self.coins - self.display_coins
+            direction = 1 if diff > 0 else -1
+            speed = max(120.0, abs(diff) * 2.5)
+            step = min(abs(diff), speed * dt)
+            self.display_coins += direction * step
+            if abs(self.coins - self.display_coins) < 0.5:
+                self.display_coins = float(self.coins)
+
     def save(self):
         SAVE_FILE.write_text(json.dumps(
             {"name":self.name,"coins":self.coins,"stats":self.stats}, indent=2))
@@ -269,6 +286,7 @@ class Player:
             try:
                 d = json.loads(SAVE_FILE.read_text())
                 p = Player(d["name"], d["coins"])
+                p.display_coins = float(d["coins"])
                 p.stats = {**p.stats, **d.get("stats",{})}
                 return p
             except: pass
@@ -280,41 +298,81 @@ class Player:
 def txt(font, text, color=WHITE):
     return font.render(str(text), True, color)
 
-def panel(surf, rect, bg=PANEL, border=GOLD, bw=2, r=10):
-    pygame.draw.rect(surf, bg, rect, border_radius=r)
+def panel(surf, rect, bg=PANEL, border=GOLD, bw=2, r=14):
+    x,y,w,h = rect
+    s = pygame.Surface((w,h), pygame.SRCALPHA)
+    pygame.draw.rect(s, (*bg, 240), (0,0,w,h), border_radius=r)
+    pygame.draw.rect(s, (255,255,255,18), (1,1,w-2,h-2), 1, border_radius=r)
+    surf.blit(s, (x,y))
     if bw:
-        pygame.draw.rect(surf, border, rect, bw, border_radius=r)
+        pygame.draw.rect(surf, border, (x,y,w,h), bw, border_radius=r)
 
 def top_bar(surf, title, player, back_btn):
-    pygame.draw.rect(surf, PANEL, (0, 0, W, 70))
-    pygame.draw.line(surf, GOLD, (0,70),(W,70), 2)
+    pygame.draw.rect(surf, PANELB, (0, 0, W, 80))
+    pygame.draw.line(surf, GOLD2, (0,80),(W,80), 2)
+    pygame.draw.line(surf, GOLD, (0,76),(W,76), 1)
     back_btn.draw(surf)
-    s = txt(F_LG, title, GOLD)
-    surf.blit(s, s.get_rect(centerx=W//2, centery=35))
-    b = txt(F_MDB, f"Balance:  {player.coins:,} c", GOLD)
-    surf.blit(b, b.get_rect(right=W-20, centery=35))
+    s = txt(F_LG, title, WHITE)
+    surf.blit(s, s.get_rect(centerx=W//2, centery=40))
+    display_balance = int(round(player.display_coins))
+    b = txt(F_MD, f"Balance:  {display_balance:,} c", LGRAY)
+    surf.blit(b, b.get_rect(right=W-30, centery=40))
+
+def draw_card_back(surf, x, y, w, h, style=0):
+    r = pygame.Rect(x, y, w, h)
+    pygame.draw.rect(surf, DKBLUE, r, border_radius=12)
+    pygame.draw.rect(surf, BLUE, r, 2, border_radius=12)
+    inset = pygame.Rect(x+8, y+8, w-16, h-16)
+    pygame.draw.rect(surf, (14, 28, 52), inset, border_radius=10)
+    if style == 0:
+        for i in range(x+14, x+w-14, 12):
+            pygame.draw.line(surf, (55,100,170), (i, y+14), (i, y+h-14), 2)
+    elif style == 1:
+        for ix in range(x+16, x+w-16, 18):
+            for iy in range(y+16, y+h-16, 18):
+                pygame.draw.circle(surf, (70,120,200), (ix, iy), 4)
+    elif style == 2:
+        for i in range(y+14, y+h-14, 12):
+            pygame.draw.line(surf, (55,100,170), (x+14, i), (x+w-14, i), 2)
+    elif style == 3:  # Dots
+        for ix in range(x+14, x+w-14, 18):
+            for iy in range(y+14, y+h-14, 18):
+                pygame.draw.circle(surf, (100,150,230), (ix, iy), 3)
+    else:  # style == 4, Checkerboard
+        sq_size = 12
+        for ix in range(x+12, x+w-12, sq_size):
+            for iy in range(y+12, y+h-12, sq_size):
+                if ((ix - x) // sq_size + (iy - y) // sq_size) % 2 == 0:
+                    pygame.draw.rect(surf, (35, 60, 95), (ix, iy, sq_size, sq_size))
+    pygame.draw.rect(surf, BLUE, r, 2, border_radius=12)
+
 
 def draw_card(surf, rank, suit, x, y, w=72, h=104, hidden=False):
     r = pygame.Rect(x, y, w, h)
     if hidden:
-        pygame.draw.rect(surf, DKBLUE, r, border_radius=8)
-        pygame.draw.rect(surf, BLUE,   r, 2, border_radius=8)
-        for i in range(0, w, 10):
-            pygame.draw.line(surf, (40,70,130),(x+i,y),(x+i,y+h),1)
-        for j in range(0, h, 10):
-            pygame.draw.line(surf, (40,70,130),(x,y+j),(x+w,y+j),1)
-        pygame.draw.rect(surf, BLUE, r, 2, border_radius=8)
+        draw_card_back(surf, x, y, w, h, getattr(SND, 'card_back', 0))
         return
-    pygame.draw.rect(surf, CREAM, r, border_radius=8)
-    pygame.draw.rect(surf, LGRAY, r, 1, border_radius=8)
+    # Card shadow
+    shd = pygame.Surface((w+8, h+8), pygame.SRCALPHA)
+    pygame.draw.rect(shd, (0, 0, 0, 100), (0, 0, w+8, h+8), border_radius=8)
+    surf.blit(shd, (x+2, y+2))
+    # Card body
+    pygame.draw.rect(surf, (252, 252, 250), r, border_radius=8)
+    pygame.draw.rect(surf, (200, 200, 195), r, 2, border_radius=8)
+    # Card edge highlight
+    pygame.draw.line(surf, (255, 255, 255, 120), (x+4, y+4), (x+w-4, y+4), 1)
+    
     color = RED if suit in RED_S else BLACK
     sym   = SUIT_SYM[suit]
+    # Top-left corner
     rl = F_SMB.render(rank, True, color)
     sl = F_XS.render(sym,  True, color)
     surf.blit(rl, (x+4, y+3))
     surf.blit(sl, (x+4, y+3+rl.get_height()))
+    # Center symbol - larger
     cs = F_LG.render(sym, True, color)
     surf.blit(cs, cs.get_rect(centerx=x+w//2, centery=y+h//2))
+    # Bottom-right corner - inverted
     rr = F_SMB.render(rank, True, color)
     sr = F_XS.render(sym,  True, color)
     surf.blit(rr, (x+w-4-rr.get_width(), y+h-3-rr.get_height()-sr.get_height()))
@@ -322,15 +380,25 @@ def draw_card(surf, rank, suit, x, y, w=72, h=104, hidden=False):
 
 def draw_die(surf, value, x, y, size=80):
     r = pygame.Rect(x, y, size, size)
-    # 3D effect: bottom/right shadow face
-    pygame.draw.rect(surf, (160,155,140), (x+size//10, y+size//10, size, size), border_radius=12)
-    pygame.draw.rect(surf, CREAM, r, border_radius=12)
-    pygame.draw.rect(surf, (100,95,85), r, 2, border_radius=12)
+    # 3D effect: bottom/right shadow face - more pronounced
+    pygame.draw.rect(surf, (140, 130, 110), (x+size//8, y+size//8, size, size), border_radius=14)
+    # Main face - cleaner white
+    pygame.draw.rect(surf, (248, 248, 245), r, border_radius=14)
+    # Border - darker for contrast
+    pygame.draw.rect(surf, (120, 115, 100), r, 3, border_radius=14)
+    # Top edge highlight
+    pygame.draw.line(surf, (255, 255, 255, 150), (x+8, y+4), (x+size-8, y+4), 2)
+    # Dots with better appearance
     for fx, fy in DICE_DOTS[value-1]:
-        pygame.draw.circle(surf, (30,30,30),
-            (int(x+fx*size)+1, int(y+fy*size)+1), max(6, size//12))
-        pygame.draw.circle(surf, (40,40,40),
-            (int(x+fx*size), int(y+fy*size)), max(6, size//12))
+        dot_x = int(x + fx*size)
+        dot_y = int(y + fy*size)
+        dot_radius = max(7, size//11)
+        # Dot shadow
+        pygame.draw.circle(surf, (100, 100, 100), (dot_x+2, dot_y+2), dot_radius)
+        # Dot body
+        pygame.draw.circle(surf, (20, 20, 20), (dot_x, dot_y), dot_radius)
+        # Dot highlight
+        pygame.draw.circle(surf, (80, 80, 80), (dot_x-2, dot_y-2), dot_radius//2)
 
 def draw_glow(surf, cx, cy, color, radii=None):
     if radii is None:
@@ -341,18 +409,27 @@ def draw_glow(surf, cx, cy, color, radii=None):
         surf.blit(s, (cx-r, cy-r))
 
 def draw_felt_bg(surf):
-    """Green casino felt table with wooden rail."""
-    surf.fill((10, 36, 16))
-    oval = pygame.Rect(36, 78, W-72, H-140)
-    # Layered felt
-    pygame.draw.ellipse(surf, (14, 48, 22), oval)
-    pygame.draw.ellipse(surf, (17, 56, 27), oval.inflate(-30,-22))
-    pygame.draw.ellipse(surf, (20, 64, 32), oval.inflate(-60,-44))
-    # Wooden rail
-    pygame.draw.ellipse(surf, (62, 40, 14), oval, 26)
-    pygame.draw.ellipse(surf, (82, 54, 20), oval, 16)
-    pygame.draw.ellipse(surf, (105, 70, 28), oval, 8)
-    pygame.draw.ellipse(surf, (130, 88, 36), oval, 3)
+    """Modern casino table background with improved depth and styling."""
+    surf.fill(BG)
+    # Radial glow rings for depth
+    ring = pygame.Surface((W, H), pygame.SRCALPHA)
+    pygame.draw.circle(ring, (100, 220, 255, 30), (W//2, H//2), 500)
+    pygame.draw.circle(ring, (100, 220, 255, 15), (W//2, H//2), 380)
+    pygame.draw.circle(ring, (255, 255, 255, 8), (W//2, H//2), 280)
+    surf.blit(ring, (0, 0))
+    # Table rails with better styling
+    rails = pygame.Rect(40, 80, W-80, H-140)
+    pygame.draw.rect(surf, (25, 80, 120), rails, border_radius=26)
+    pygame.draw.rect(surf, (40, 100, 140), rails, 3, border_radius=26)
+    pygame.draw.rect(surf, (50, 120, 160), rails.inflate(-12, -12), 2, border_radius=22)
+    # Inner felt area with subtle texture
+    felt_area = rails.inflate(-40, -40)
+    pygame.draw.rect(surf, (30, 110, 60), felt_area, border_radius=20)
+    # Subtle scanlines for texture
+    for y in range(felt_area.top, felt_area.bottom, 8):
+        pygame.draw.line(surf, (255, 255, 255, 3), (felt_area.left, y), (felt_area.right, y), 1)
+    # Edge highlights
+    pygame.draw.rect(surf, (255, 255, 255, 15), felt_area, 1, border_radius=20)
 
 def draw_chips(surf, cx, cy, amount):
     """Draw a casino chip stack for 'amount'."""
@@ -381,49 +458,53 @@ def draw_roulette_wheel(surf, cx, cy, r, angle=0.0):
     """Draw a full roulette wheel at given center+radius+rotation angle (radians)."""
     n   = len(WHEEL_NUMS)
     seg = 2 * math.pi / n
-    # Outer wood rim
-    pygame.draw.circle(surf, (48, 32, 12), (cx, cy), r+12)
-    pygame.draw.circle(surf, (72, 50, 20), (cx, cy), r+8, 6)
-    pygame.draw.circle(surf, (105,72, 28), (cx, cy), r+3, 3)
-    # Number pockets
+    # Outer wood rim - more polished
+    pygame.draw.circle(surf, (36, 20, 8), (cx, cy), r+16)
+    pygame.draw.circle(surf, (70, 45, 15), (cx, cy), r+12, 8)
+    pygame.draw.circle(surf, (110, 75, 28), (cx, cy), r+5, 4)
+    # Number pockets with improved colors
     for i, num in enumerate(WHEEL_NUMS):
         a1 = i * seg + angle - math.pi/2
         a2 = (i+1)*seg + angle - math.pi/2
-        col = (18,115,38) if num==0 else (172,28,28) if num in RED_NUMS else (14,14,14)
+        col = (20, 140, 50) if num==0 else (200, 30, 30) if num in RED_NUMS else (10, 10, 10)
         pts = [(cx, cy)]
         for s in range(8):
             a = a1 + (a2-a1)*s/7
             pts.append((int(cx+r*math.cos(a)), int(cy+r*math.sin(a))))
         pygame.draw.polygon(surf, col, pts)
-        # Pocket divider at the start edge of this pocket
-        pygame.draw.line(surf, (65,46,18),
+        # Pocket divider - brighter
+        pygame.draw.line(surf, (85, 60, 25),
             (int(cx + 0.46*r*math.cos(a1)), int(cy + 0.46*r*math.sin(a1))),
-            (int(cx + r     *math.cos(a1)), int(cy + r     *math.sin(a1))), 1)
-    # Clean outer edge
-    pygame.draw.circle(surf, (90, 62, 24), (cx, cy), r, 3)
-    # Inner felt
+            (int(cx + r     *math.cos(a1)), int(cy + r     *math.sin(a1))), 2)
+    # Clean outer edge - chrome effect
+    pygame.draw.circle(surf, (110, 80, 35), (cx, cy), r, 4)
+    # Inner felt with better depth
     ir = int(r * 0.44)
-    pygame.draw.circle(surf, (16, 60, 28), (cx, cy), ir)
-    pygame.draw.circle(surf, (22, 76, 36), (cx, cy), int(ir*0.84))
-    # Spokes
+    pygame.draw.circle(surf, (14, 70, 35), (cx, cy), ir)
+    pygame.draw.circle(surf, (18, 90, 45), (cx, cy), int(ir*0.84))
+    # Spokes - more visible
     for s in range(8):
         sa = s * math.pi/4 + angle
-        pygame.draw.line(surf, (52, 36, 14),
+        pygame.draw.line(surf, (70, 50, 20),
             (cx, cy),
-            (int(cx+ir*math.cos(sa)), int(cy+ir*math.sin(sa))), 2)
-    # Center hub
-    pygame.draw.circle(surf, (45, 30, 10), (cx, cy), int(r*0.13))
-    pygame.draw.circle(surf, GOLD3,         (cx, cy), int(r*0.075))
-    pygame.draw.circle(surf, GOLD2,         (cx, cy), int(r*0.04))
+            (int(cx+ir*math.cos(sa)), int(cy+ir*math.sin(sa))), 3)
+    # Center hub with shine
+    pygame.draw.circle(surf, (35, 20, 8), (cx, cy), int(r*0.13))
+    pygame.draw.circle(surf, (240, 200, 100), (cx, cy), int(r*0.1), 2)
+    pygame.draw.circle(surf, GOLD, (cx, cy), int(r*0.075))
+    pygame.draw.circle(surf, (255, 255, 255, 200), (cx-3, cy-3), int(r*0.045))
 
 def draw_roulette_ball(surf, cx, cy, r, angle):
     orbit = r - 16
     bx = int(cx + orbit * math.cos(angle))
     by = int(cy + orbit * math.sin(angle))
-    pygame.draw.circle(surf, (30,30,30), (bx+2,by+2), 8)
-    pygame.draw.circle(surf, (210,210,210), (bx,by), 8)
-    pygame.draw.circle(surf, WHITE,          (bx,by), 6)
-    pygame.draw.circle(surf, (180,180,180),  (bx-2,by-2), 3)
+    # Shadow
+    pygame.draw.circle(surf, (0, 0, 0, 100), (bx+3, by+3), 10)
+    # Ball body with shine
+    pygame.draw.circle(surf, (20, 20, 20), (bx, by), 10)
+    pygame.draw.circle(surf, (240, 240, 240), (bx, by), 8)
+    pygame.draw.circle(surf, WHITE, (bx, by), 6)
+    pygame.draw.circle(surf, (200, 200, 200), (bx-3, by-3), 4)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Card fly animation
@@ -491,7 +572,11 @@ class Btn:
     def draw(self, surf):
         mp  = pygame.mouse.get_pos()
         hot = self.rect.collidepoint(mp) and self.on
-        bg  = self.hover if hot else (GRAY if not self.on else self.bg)
+        bg  = self.hover if hot else (self.bg if self.on else (40, 48, 62))
+        if hot:
+            glow = pygame.Surface((self.rect.w+22, self.rect.h+22), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (*self.border, 32), glow.get_rect(), border_radius=self.r+12)
+            surf.blit(glow, (self.rect.x-11, self.rect.y-11))
         pygame.draw.rect(surf, bg, self.rect, border_radius=self.r)
         if self.bw:
             bc = self.border if self.on else (60,60,60)
@@ -856,121 +941,143 @@ def _draw_cabinet_icon(surf, game_key, sx, sy, sw, sh):
     cx, cy = sx + sw//2, sy + sh//2
 
     if game_key == "slots":
-        for i, c in enumerate([(220,50,50), GOLD, (220,50,50)]):
-            s = F_LG.render("7", True, c)
-            surf.blit(s, s.get_rect(centerx=cx+(i-1)*30, centery=cy))
+        for i, (offset, tint) in enumerate([(-36, BLUE), (0, GOLD), (36, RED)]):
+            s = F_LG.render("7", True, tint)
+            surf.blit(s, s.get_rect(centerx=cx+offset, centery=cy-4))
+        for offset in [-42, -18, 6, 30]:
+            pygame.draw.rect(surf, (255,255,255, 40), (cx+offset, cy+32, 8, 4), border_radius=2)
 
     elif game_key == "blackjack":
-        cw2, ch2 = 42, 60
-        for di, (ox, oy, rk, su, clr) in enumerate([
-                (-24, -5, "A", "S", BLACK), (6, 5, "K", "H", RED)]):
-            rx2, ry2 = cx+ox, cy+oy
-            pygame.draw.rect(surf, CREAM, (rx2,ry2,cw2,ch2), border_radius=5)
-            pygame.draw.rect(surf, LGRAY, (rx2,ry2,cw2,ch2), 1, border_radius=5)
-            surf.blit(F_SMB.render(rk, True, clr), (rx2+3, ry2+2))
-            surf.blit(F_XS.render(SUIT_SYM[su], True, clr), (rx2+3, ry2+18))
-            big = F_MD.render(SUIT_SYM[su], True, clr)
-            surf.blit(big, big.get_rect(centerx=rx2+cw2//2, centery=ry2+ch2//2))
+        card1 = pygame.Rect(cx-34, cy-22, 46, 70)
+        card2 = pygame.Rect(cx-16, cy-10, 46, 70)
+        pygame.draw.rect(surf, (248,248,244), card1, border_radius=12)
+        pygame.draw.rect(surf, (192,192,192), card1, 2, border_radius=12)
+        pygame.draw.rect(surf, (232,232,228), card2, border_radius=12)
+        pygame.draw.rect(surf, (170,170,170), card2, 2, border_radius=12)
+        surf.blit(F_SMB.render("A", True, BLACK), (card1.x+6, card1.y+6))
+        surf.blit(F_XS.render(SUIT_SYM["S"], True, BLACK), (card1.x+6, card1.y+28))
+        surf.blit(F_MD.render(SUIT_SYM["S"], True, BLACK), F_MD.render(SUIT_SYM["S"], True, BLACK).get_rect(center=(card1.centerx+2, card1.centery)))
+        surf.blit(F_SMB.render("K", True, RED), (card2.x+8, card2.y+8))
+        surf.blit(F_XS.render(SUIT_SYM["H"], True, RED), (card2.x+8, card2.y+30))
+        surf.blit(F_MD.render(SUIT_SYM["H"], True, RED), F_MD.render(SUIT_SYM["H"], True, RED).get_rect(center=(card2.centerx+2, card2.centery)))
+        pygame.draw.circle(surf, GOLD, (cx+18, cy+28), 14)
+        pygame.draw.circle(surf, (255,255,255,150), (cx+14, cy+24), 7)
+        surf.blit(F_SMB.render("21", True, BLACK), F_SMB.render("21", True, BLACK).get_rect(center=(cx+18, cy+28)))
 
     elif game_key == "roulette":
         R = 38
-        pygame.draw.circle(surf, (20,20,20), (cx,cy), R)
+        pygame.draw.circle(surf, (28,28,34), (cx,cy), R)
         for i in range(18):
-            a1 = i*20 * math.pi/180
-            a2 = (i*20+10) * math.pi/180
-            points = [(cx,cy)]
-            for a in [a1, (a1+a2)/2, a2]:
-                points.append((cx+int(R*math.cos(a)), cy+int(R*math.sin(a))))
-            pygame.draw.polygon(surf, ROULRED if i%2==0 else (30,30,30), points)
-        pygame.draw.circle(surf, (25,25,25), (cx,cy), R, 2)
-        pygame.draw.circle(surf, (50,50,50), (cx,cy), 14)
-        pygame.draw.circle(surf, GOLD,       (cx,cy), 5)
+            a1 = math.radians(i*20)
+            a2 = math.radians(i*20 + 10)
+            color = ROULRED if i % 2 == 0 else (35,35,35)
+            pygame.draw.polygon(surf, color, [
+                (cx,cy),
+                (cx+int(R*math.cos(a1)), cy+int(R*math.sin(a1))),
+                (cx+int(R*math.cos(a2)), cy+int(R*math.sin(a2))) ] )
+        pygame.draw.circle(surf, (18,18,18), (cx,cy), 16)
+        pygame.draw.circle(surf, GOLD, (cx,cy), 6)
+        pygame.draw.circle(surf, (255,255,255,150), (cx+26, cy-8), 5)
 
     elif game_key == "dice":
-        ds = 40
-        for ox, oy, val in [(-26,-8,5),(10,-8,3)]:
+        for ox, oy, val in [(-22,-10,5), (10,4,2)]:
             dx, dy = cx+ox, cy+oy
-            pygame.draw.rect(surf, CREAM, (dx,dy,ds,ds), border_radius=7)
-            pygame.draw.rect(surf, GRAY,  (dx,dy,ds,ds), 1, border_radius=7)
+            pygame.draw.rect(surf, CREAM, (dx,dy,38,38), border_radius=10)
+            pygame.draw.rect(surf, GRAY, (dx,dy,38,38), 2, border_radius=10)
             for fx, fy in DICE_DOTS[val-1]:
-                pygame.draw.circle(surf, BLACK, (int(dx+fx*ds),int(dy+fy*ds)), 4)
+                pygame.draw.circle(surf, BLACK, (int(dx+fx*38), int(dy+fy*38)), 4)
+        pygame.draw.line(surf, (255,255,255,100), (cx-10, cy+22), (cx+20, cy+22), 2)
 
     elif game_key == "hilo":
-        pygame.draw.polygon(surf, WINC,
-            [(cx,cy-32),(cx-16,cy-14),(cx+16,cy-14)])
-        pygame.draw.polygon(surf, LOSEC,
-            [(cx,cy+32),(cx-16,cy+14),(cx+16,cy+14)])
-        q = F_MDB.render("?", True, CREAM)
-        surf.blit(q, q.get_rect(center=(cx, cy)))
+        pygame.draw.rect(surf, (40,120,220), (cx-24, cy-34, 24, 48), border_radius=6)
+        pygame.draw.rect(surf, (220,75,75), (cx+4, cy+2, 24, 36), border_radius=6)
+        pygame.draw.polygon(surf, WHITE, [(cx-13,cy-38),(cx-21,cy-24),(cx-5,cy-24)])
+        pygame.draw.polygon(surf, WHITE, [(cx+28,cy+38),(cx+20,cy+24),(cx+36,cy+24)])
+        surf.blit(F_SMB.render("H", True, WHITE), (cx-21, cy-24))
+        surf.blit(F_SMB.render("L", True, WHITE), (cx+9, cy+16))
 
     elif game_key == "coinflip":
-        pygame.draw.circle(surf, GOLD2,  (cx,cy), 36)
-        pygame.draw.circle(surf, GOLD3,  (cx,cy), 36, 3)
-        pygame.draw.circle(surf, GOLD,   (cx,cy), 28)
-        surf.blit(F_MDB.render("H", True, BLACK),
-                  F_MDB.render("H", True, BLACK).get_rect(center=(cx,cy)))
+        pygame.draw.circle(surf, (205,170,70), (cx-8,cy), 30)
+        pygame.draw.circle(surf, (245,225,125), (cx-8,cy), 22)
+        pygame.draw.circle(surf, (205,170,70), (cx+14,cy+4), 24)
+        pygame.draw.circle(surf, (240,220,115), (cx+14,cy+4), 18)
+        pygame.draw.circle(surf, (255,255,255,150), (cx-18, cy-10), 8)
+        pygame.draw.circle(surf, (255,255,255,120), (cx+18, cy+2), 6)
+        surf.blit(F_MDB.render("H", True, BLACK), F_MDB.render("H", True, BLACK).get_rect(center=(cx-8,cy)))
+        surf.blit(F_MDB.render("T", True, BLACK), F_MDB.render("T", True, BLACK).get_rect(center=(cx+14,cy+4)))
 
 
-def draw_cabinet(surf, x, y, game_key, game_name, game_desc, hovered):
+def draw_cabinet(surf, x, y, game_key, game_name, game_desc, hovered, can_afford=True):
     w, h  = CAB_W, CAB_H
-    color = GAME_COLORS[game_key]
+    base_color = GAME_COLORS[game_key]
     tick  = pygame.time.get_ticks()
-    shd = pygame.Surface((w+8, h+8), pygame.SRCALPHA)
-    pygame.draw.rect(shd, (0,0,0,70), (0,0,w+8,h+8), border_radius=14)
-    surf.blit(shd, (x+4, y+4))
-    body_c = (44, 52, 62) if hovered else (32, 38, 46)
-    pygame.draw.rect(surf, body_c, (x,y,w,h), border_radius=12)
-    for sx2 in [x+10, x+w-16]:
-        pygame.draw.rect(surf, (55,63,74), (sx2,y+50,6,h-70), border_radius=3)
-    mh = 44
-    pygame.draw.rect(surf, color, (x,y,w,mh),
-                     border_top_left_radius=12, border_top_right_radius=12)
-    shine = pygame.Surface((w, mh//2), pygame.SRCALPHA)
-    shine.fill((255,255,255,25))
-    surf.blit(shine, (x, y))
-    tl = F_MDB.render(game_name, True, BLACK)
-    surf.blit(tl, tl.get_rect(centerx=x+w//2, centery=y+mh//2))
-    scr_x, scr_y = x+20, y+mh+10
-    scr_w, scr_h = w-40, 108
-    pygame.draw.rect(surf, (5,8,12),   (scr_x-4,scr_y-4,scr_w+8,scr_h+8), border_radius=8)
-    pygame.draw.rect(surf, (12,16,22), (scr_x,scr_y,scr_w,scr_h),          border_radius=6)
-    _draw_cabinet_icon(surf, game_key, scr_x, scr_y, scr_w, scr_h)
-    led_y   = scr_y + scr_h + 10
-    phase   = (tick // 350) % 2
-    n_leds  = 10
-    led_gap = (w - 40) // n_leds
-    for i in range(n_leds):
-        lx2  = x + 20 + i * led_gap + led_gap//2
-        on   = (i + phase) % 2 == 0
-        lc   = color if on else (color[0]//5, color[1]//5, color[2]//5)
-        pygame.draw.circle(surf, lc, (lx2, led_y), 5)
-    cs_x = x + w//2 - 14
-    cs_y = y + h - 36
-    pygame.draw.rect(surf, (18,22,28), (cs_x,cs_y,28,9), border_radius=4)
-    pygame.draw.rect(surf, (50,56,66), (cs_x,cs_y,28,9), 1, border_radius=4)
-    dl = F_XS.render(game_desc, True, LGRAY if not hovered else WHITE)
-    surf.blit(dl, dl.get_rect(centerx=x+w//2, centery=y+h-16))
-    border_c = GOLD if hovered else (color[0]//2, color[1]//2, color[2]//2)
-    pygame.draw.rect(surf, border_c, (x,y,w,h), 3 if hovered else 2, border_radius=12)
+    pulse = 0.80 + abs(math.sin(tick * 0.004)) * 0.20
+    color = tuple(int(c * pulse) for c in base_color)
+    if not can_afford:
+        color = tuple(int(c * 0.45) for c in color)
+    shd = pygame.Surface((w+12, h+12), pygame.SRCALPHA)
+    pygame.draw.rect(shd, (0,0,0,90), (0,0,w+12,h+12), border_radius=18)
+    surf.blit(shd, (x+6, y+6))
+    body_c = PANELB if not hovered else (34, 46, 66)
+    if not can_afford:
+        body_c = tuple(int(c * 0.7) for c in body_c)
+    pygame.draw.rect(surf, body_c, (x,y,w,h), border_radius=18)
+    pygame.draw.rect(surf, color, (x,y,w,52), border_top_left_radius=18, border_top_right_radius=18)
+    pygame.draw.rect(surf, (*WHITE, 20), (x+12, y+12, w-24, 28), border_radius=12)
     if hovered:
-        glow = pygame.Surface((w,h), pygame.SRCALPHA)
-        pygame.draw.rect(glow, (*color, 18), (0,0,w,h), border_radius=12)
-        surf.blit(glow, (x,y))
+        overlay = pygame.Surface((w-40, 28), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 120))
+        surf.blit(overlay, (x+20, y+14))
+    title = F_MDB.render(game_name, True, WHITE if hovered else LGRAY)
+    surf.blit(title, title.get_rect(centerx=x+w//2, centery=y+26))
+    scr_x, scr_y = x+18, y+70
+    scr_w, scr_h = w-36, 108
+    panel(surf, (scr_x, scr_y, scr_w, scr_h), PANEL, GOLD3, 1, 14)
+    _draw_cabinet_icon(surf, game_key, scr_x, scr_y, scr_w, scr_h)
+    desc_bg = pygame.Surface((w-44, 28), pygame.SRCALPHA)
+    desc_bg.fill((0, 0, 0, 150))
+    desc_y = y + h - 44
+    surf.blit(desc_bg, (x+22, desc_y))
+    dl = F_XS.render(game_desc, True, WHITE if hovered else LGRAY)
+    surf.blit(dl, dl.get_rect(centerx=x+w//2, centery=desc_y+14))
+    led_y   = y + h - 12
+    phase   = (tick // 450) % 3
+    n_leds  = 7
+    led_gap = (w - 76) // n_leds
+    for i in range(n_leds):
+        lx2  = x + 34 + i * led_gap
+        rect = pygame.Rect(lx2, led_y, 14, 6)
+        if can_afford:
+            alpha = 180 if hovered else 80
+            glow = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            glow.fill((*color, alpha if (i+phase)%2==0 else alpha//2))
+            surf.blit(glow, rect.topleft)
+        else:
+            pygame.draw.rect(surf, (40,45,55), rect, border_radius=3)
+    border_c = GOLD if hovered else (65, 100, 150)
+    pygame.draw.rect(surf, border_c, (x,y,w,h), 2, border_radius=18)
+    if hovered:
+        glow = pygame.Surface((w-16,h-16), pygame.SRCALPHA)
+        pygame.draw.rect(glow, (*color, 30), (0,0,w-16,h-16), border_radius=16)
+        surf.blit(glow, (x+8,y+8))
+    if can_afford:
+        draw_glow(surf, x + w//2, y + h//2, color, [(90,6),(50,12),(25,20)])
 
 
 def draw_lobby_bg(surf):
-    surf.fill((6,18,11))
-    ts = 72
-    for tx in range(0, W, ts):
-        for ty in range(0, H, ts):
-            if (tx//ts + ty//ts) % 2 == 0:
-                pygame.draw.rect(surf, (8,22,13), (tx,ty,ts,ts))
-    for tx in range(0, W, ts):
-        pygame.draw.line(surf, (11,30,17), (tx,0),(tx,H), 1)
-    for ty in range(0, H, ts):
-        pygame.draw.line(surf, (11,30,17), (0,ty),(W,ty), 1)
-    for lx in [W//4, W//2, 3*W//4]:
-        draw_glow(surf, lx, 0, (255,220,140), [(260,7),(160,13),(80,22),(30,35)])
+    surf.fill(BG)
+    for i, alpha in enumerate([18, 14, 10]):
+        glow = pygame.Surface((W, H), pygame.SRCALPHA)
+        pygame.draw.circle(glow, (88, 204, 255, alpha), (W//2, H//2-80), 420 - i*120)
+        surf.blit(glow, (0,0))
+    vignette = pygame.Surface((W, H), pygame.SRCALPHA)
+    pygame.draw.rect(vignette, (0,0,0,100), (0,0,W,H), border_radius=0)
+    surf.blit(vignette, (0,0))
+    pygame.draw.line(surf, GOLD2, (0, 120), (W, 120), 1)
+    for x in range(0, W, 80):
+        pygame.draw.line(surf, (255,255,255,8), (x, 0), (x, H), 1)
+    for y in range(0, H, 80):
+        pygame.draw.line(surf, (255,255,255,8), (0, y), (W, y), 1)
 
 
 class LobbyState:
@@ -1010,8 +1117,9 @@ class LobbyState:
         pygame.draw.line(surf, GOLD, (0,126),(W,126), 2)
         t = F_TITLE.render("CASINO ROYALE", True, GOLD)
         surf.blit(t, t.get_rect(centerx=W//2, centery=48))
+        display_balance = int(round(self.player.display_coins))
         bal = F_MDB.render(
-            f"{self.player.name}   |   Balance:  {self.player.coins:,} c",
+            f"{self.player.name}   |   Balance:  {display_balance:,} c",
             True, CREAM)
         surf.blit(bal, bal.get_rect(centerx=W//2, centery=96))
         pygame.draw.rect(surf, (4,12,8), (0,H-56,W,56))
@@ -1023,7 +1131,7 @@ class LobbyState:
         for i, (key, name, desc) in enumerate(GAME_LIST):
             _, rect = self._rects[i]
             hovered = rect.collidepoint(mouse)
-            draw_cabinet(surf, rect.x, rect.y, key, name, desc, hovered)
+            draw_cabinet(surf, rect.x, rect.y, key, name, desc, hovered, self.player.coins >= 10)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Slot Machine  — cabinet body + animated lever
@@ -1058,6 +1166,13 @@ class SlotsState:
         self.lever_anim    = "idle"
         self.lever_t       = 0.0
         self._lever_grabbed = False
+        # Auto spin
+        self.auto_spins   = 0
+        self.auto_btns    = [
+            Btn((W-250, 340, 80, 40), "5x", PANELB, GOLD2, tc=GOLD, font=F_SM),
+            Btn((W-250, 390, 80, 40), "10x", PANELB, GOLD2, tc=GOLD, font=F_SM),
+            Btn((W-250, 440, 80, 40), "25x", PANELB, GOLD2, tc=GOLD, font=F_SM),
+        ]
 
     # ── lever helpers ──────────────────────────────────────────────────────────
     def _lever_ball_pos(self):
@@ -1077,6 +1192,16 @@ class SlotsState:
     def handle_event(self, event):
         if self.back_btn.clicked(event):
             return "game_over" if self.player.coins <= 0 else "lobby"
+
+        # Auto spin buttons
+        if self.state in ("idle", "result") and not self._lever_grabbed:
+            for i, btn in enumerate(self.auto_btns):
+                if btn.clicked(event):
+                    spins = [5, 10, 25][i]
+                    if self.player.coins >= self.bet_sel.value * spins:
+                        self.auto_spins = spins
+                        self._do_spin()
+                    break
 
         # Grab lever on mouse-down near the ball
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -1184,61 +1309,73 @@ class SlotsState:
         if self.player.coins <= 0: self.player.coins = 0
         self.player.save()
         self.bet_sel.bet = max(10, min(self.bet_sel.bet, self.player.coins))
+        # Auto spin chaining
+        if self.auto_spins > 0:
+            if self.player.coins >= self.bet_sel.value:
+                self.auto_spins -= 1
+                self._do_spin()
+            else:
+                self.auto_spins = 0
         self.state = "result"
 
     # ── draw helpers ──────────────────────────────────────────────────────────
     def _draw_machine_body(self, surf):
         mx, my, mw, mh = _M_X, _M_Y, _M_W, _M_H
         # Drop shadow
-        shd = pygame.Surface((mw+12,mh+12), pygame.SRCALPHA)
-        pygame.draw.rect(shd,(0,0,0,90),(0,0,mw+12,mh+12),border_radius=20)
-        surf.blit(shd,(mx+6,my+6))
-        # Outer shell
-        pygame.draw.rect(surf,(36,42,52),(mx,my,mw,mh),border_radius=18)
-        # Inner panel
-        pygame.draw.rect(surf,(48,56,68),(mx+8,my+8,mw-16,mh-16),border_radius=14)
-        # Side chrome rails
-        for sx2 in [mx+18, mx+mw-24]:
-            pygame.draw.rect(surf,(62,70,84),(sx2,my+70,8,mh-110),border_radius=4)
-            pygame.draw.rect(surf,(90,100,115),(sx2+1,my+70,3,mh-110),border_radius=4)
-        # Bottom plate
+        shd = pygame.Surface((mw+16, mh+16), pygame.SRCALPHA)
+        pygame.draw.rect(shd, (0,0,0,140), (0,0,mw+16,mh+16), border_radius=20)
+        surf.blit(shd, (mx+4, my+4))
+        # Outer shell gradient effect
+        pygame.draw.rect(surf, (20,24,36), (mx, my, mw, mh), border_radius=18)
+        pygame.draw.rect(surf, (50,65,100), (mx, my, mw, mh), 3, border_radius=18)
+        # Inner panel with depth
+        pygame.draw.rect(surf, (32,40,56), (mx+8, my+8, mw-16, mh-16), border_radius=14)
+        # Side chrome rails - more polished
+        for sx2 in [mx+16, mx+mw-22]:
+            pygame.draw.rect(surf, (100,115,145), (sx2, my+50, 12, mh-90), border_radius=6)
+            pygame.draw.rect(surf, (180,195,215), (sx2+2, my+50, 4, mh-90), border_radius=3)
+        # Bottom panel - coin return area
         bpy = my+mh-52
-        pygame.draw.rect(surf,(28,34,42),(mx,bpy,mw,52),
-                         border_bottom_left_radius=18,border_bottom_right_radius=18)
-        pygame.draw.rect(surf,(44,52,64),(mx,bpy,mw,52),2,
-                         border_bottom_left_radius=18,border_bottom_right_radius=18)
-        # Coin slot on bottom plate
-        csx,csy = mx+mw//2-22, bpy+20
-        pygame.draw.rect(surf,(16,20,26),(csx,csy,44,10),border_radius=5)
-        pygame.draw.rect(surf,(48,56,68),(csx,csy,44,10),1,border_radius=5)
-        surf.blit(F_XS.render("INSERT COIN",True,(50,58,70)),
-                  F_XS.render("INSERT COIN",True,(50,58,70)).get_rect(centerx=mx+mw//2,top=csy+12))
-        # Outer border
-        pygame.draw.rect(surf,GOLD3,(mx,my,mw,mh),2,border_radius=18)
+        pygame.draw.rect(surf, (18, 22, 32), (mx, bpy, mw, 52), border_radius=18)
+        pygame.draw.rect(surf, (40, 52, 80), (mx+10, bpy+8, mw-20, 36), border_radius=14)
+        csx, csy = mx+mw//2-28, bpy+18
+        pygame.draw.rect(surf, (12, 16, 24), (csx, csy, 56, 14), border_radius=8)
+        pygame.draw.rect(surf, (120, 170, 255), (csx, csy, 56, 14), 2, border_radius=8)
+        surf.blit(F_XS.render("INSERT COIN", True, GOLD),
+                  F_XS.render("INSERT COIN", True, GOLD).get_rect(centerx=mx+mw//2, centery=csy+7))
 
     def _draw_marquee(self, surf):
         mx, my, mw = _M_X, _M_Y, _M_W
         mh_q = 62
-        acc = GAME_COLORS["slots"]
-        pygame.draw.rect(surf, acc, (mx,my,mw,mh_q),
-                         border_top_left_radius=18,border_top_right_radius=18)
-        # Shine
-        sh = pygame.Surface((mw,28),pygame.SRCALPHA)
-        sh.fill((255,255,255,30))
-        surf.blit(sh,(mx,my))
-        # Title
-        tl = F_LG.render("SLOT  MACHINE", True, BLACK)
+        # Marquee background - darker gradient effect
+        block = pygame.Rect(mx, my, mw, mh_q)
+        pygame.draw.rect(surf, (22, 28, 40), block, border_top_left_radius=18, border_top_right_radius=18)
+        pygame.draw.rect(surf, (45, 65, 110), block, 2, border_top_left_radius=18, border_top_right_radius=18)
+        # Horizontal scanlines for vintage feel
+        sh = pygame.Surface((mw, mh_q), pygame.SRCALPHA)
+        for i in range(5):
+            pygame.draw.line(sh, (255, 255, 255, 8), (0, 12 + i*11), (mw, 12 + i*11), 1)
+        surf.blit(sh, (mx, my))
+        # Title text with better styling
+        tl = F_LG.render("SLOT MACHINE", True, (255, 250, 200))
         surf.blit(tl, tl.get_rect(centerx=mx+mw//2, centery=my+mh_q//2))
-        # LED strip along marquee bottom
-        tick  = pygame.time.get_ticks()
-        phase = (tick//220)%2
+        # Animated LED lights - more vibrant
+        tick = pygame.time.get_ticks()
+        phase = (tick//200) % 3
         n_led = 24
-        lgap  = (mw-40)//n_led
+        lgap = (mw-48)//n_led
         for i in range(n_led):
-            lx2 = mx+20+i*lgap+lgap//2
-            on  = (i+phase)%2==0
-            lc  = GOLD if on else (GOLD3[0]//2,GOLD3[1]//2,GOLD3[2]//2)
-            pygame.draw.circle(surf,lc,(lx2,my+mh_q-8),5)
+            lx2 = mx+24+i*lgap+lgap//2
+            # Cycling color animation
+            led_state = (i + phase) % 3
+            if led_state == 0:
+                lc = ROULRED
+            elif led_state == 1:
+                lc = GOLD
+            else:
+                lc = (60, 150, 255)
+            pygame.draw.circle(surf, lc, (lx2, my+mh_q-10), 6)
+            pygame.draw.circle(surf, (255, 255, 255, 120), (lx2-2, my+mh_q-12), 2)
 
     def _draw_reel_window(self, surf):
         rw_total = 3*REEL_W + 2*20
@@ -1246,47 +1383,58 @@ class SlotsState:
         ry = 150
         bw2 = rw_total+40
         bh2 = REEL_H+40
-        # Outer bezel
-        pygame.draw.rect(surf,(22,26,34),(rx-20,ry-20,bw2,bh2),border_radius=14)
-        pygame.draw.rect(surf,(40,46,58),(rx-20,ry-20,bw2,bh2),2,border_radius=14)
-        # Inner dark recess
-        pygame.draw.rect(surf,(6,8,12),(rx-14,ry-14,bw2-12,bh2-12),border_radius=10)
+        # Outer bezel - chrome effect
+        pygame.draw.rect(surf, (16, 20, 28), (rx-20, ry-20, bw2, bh2), border_radius=16)
+        pygame.draw.rect(surf, (60, 90, 150), (rx-20, ry-20, bw2, bh2), 3, border_radius=16)
+        pygame.draw.rect(surf, (100, 130, 180), (rx-18, ry-18, bw2-4, bh2-4), 1, border_radius=14)
+        # Inner dark recess with depth
+        pygame.draw.rect(surf, (8, 10, 16), (rx-14, ry-14, bw2-12, bh2-12), border_radius=12)
+        pygame.draw.rect(surf, (20, 30, 50), (rx-14, ry-14, bw2-12, bh2-12), 1, border_radius=12)
         # Reels
         for i, reel in enumerate(self.reels):
             reel.draw(surf, rx+i*(REEL_W+20), ry)
-        # Glass overlay
-        glass = pygame.Surface((bw2-12,bh2-12),pygame.SRCALPHA)
-        pygame.draw.rect(glass,(180,220,255,8),(0,0,bw2-12,bh2-12),border_radius=10)
-        surf.blit(glass,(rx-14,ry-14))
-        # PAY label with arrows
+        # Glass overlay - stronger reflective effect
+        glass = pygame.Surface((bw2-12, bh2-12), pygame.SRCALPHA)
+        pygame.draw.rect(glass, (200, 230, 255, 12), (0, 0, bw2-12, bh2-12), border_radius=10)
+        pygame.draw.line(glass, (200, 230, 255, 40), (0, 20), (bw2-12, 20), 2)
+        surf.blit(glass, (rx-14, ry-14))
+        # PAY label with improved arrows
         py_cy = ry + REEL_H//2
-        surf.blit(F_XS.render("PAY",True,GOLD),(rx-46,py_cy-8))
-        pygame.draw.polygon(surf,GOLD,[(rx-48,py_cy),(rx-38,py_cy-6),(rx-38,py_cy+6)])
-        # Win-flash glow on payline
+        pay_lbl = F_XS.render("PAY", True, GOLD)
+        surf.blit(pay_lbl, (rx-50, py_cy-8))
+        pygame.draw.polygon(surf, GOLD, [(rx-48, py_cy), (rx-36, py_cy-8), (rx-36, py_cy+8)])
+        # Win-flash glow on payline - brighter
         if self._win_flash > 0:
-            pulse = abs(math.sin(self._win_flash * 9))
+            pulse = abs(math.sin(self._win_flash * 10))
             glow_s = pygame.Surface((bw2, SYM_H+16), pygame.SRCALPHA)
-            ga = int(60 * pulse)
-            pygame.draw.rect(glow_s, (255,215,0,ga),
-                             (0,0,bw2,SYM_H+16), border_radius=8)
+            ga = int(100 * pulse)
+            pygame.draw.rect(glow_s, (255, 220, 50, ga), (0, 0, bw2, SYM_H+16), border_radius=8)
             surf.blit(glow_s, (rx-20, ry+SYM_H-8))
             # Bright border on payline frame
-            bc = (int(180+75*pulse), int(150+65*pulse), 0)
-            pygame.draw.rect(surf, bc, (rx-6, ry+SYM_H-4, bw2-8, SYM_H+8), 3)
+            bc = (int(220+35*pulse), int(180+35*pulse), 0)
+            pygame.draw.rect(surf, bc, (rx-6, ry+SYM_H-4, bw2-8, SYM_H+8), 4)
 
     def _draw_paytable(self, surf):
-        px, py = _M_X+22, 148
-        pw, ph = 196, 400
-        panel(surf,(px,py,pw,ph),PANELB,GOLD3,1,8)
-        hdr = F_SMB.render("PAYTABLE",True,GOLD)
-        surf.blit(hdr, hdr.get_rect(centerx=px+pw//2,top=py+8))
-        pygame.draw.line(surf,GOLD3,(px+8,py+30),(px+pw-8,py+30),1)
-        for i,(name,col,pay,_) in enumerate(SLOT_DEFS):
-            y2 = py+40+i*50
-            # Color swatch
-            pygame.draw.rect(surf,col,(px+10,y2+2,18,18),border_radius=3)
-            surf.blit(F_SM.render(name,True,col),(px+34,y2))
-            surf.blit(F_XS.render(f"x3  =  {pay}x bet",True,LGRAY),(px+34,y2+17))
+        px, py = _M_X+20, 148
+        pw, ph = 200, 400
+        # Panel with better styling
+        pygame.draw.rect(surf, (16, 22, 36), (px-2, py-2, pw+4, ph+4), border_radius=10)
+        pygame.draw.rect(surf, (20, 28, 42), (px, py, pw, ph), border_radius=10)
+        pygame.draw.rect(surf, (80, 120, 200), (px, py, pw, ph), 2, border_radius=10)
+        # Header
+        hdr = F_SMB.render("PAYTABLE", True, (255, 240, 150))
+        surf.blit(hdr, hdr.get_rect(centerx=px+pw//2, top=py+10))
+        pygame.draw.line(surf, (100, 140, 200), (px+10, py+34), (px+pw-10, py+34), 2)
+        # Payout rows with better styling
+        for i, (name, col, pay, _) in enumerate(SLOT_DEFS):
+            y2 = py+45+i*50
+            # Color swatch - larger and better styled
+            pygame.draw.rect(surf, col, (px+10, y2+2, 20, 20), border_radius=4)
+            pygame.draw.rect(surf, (200, 200, 200), (px+10, y2+2, 20, 20), 1, border_radius=4)
+            # Text with better contrast
+            surf.blit(F_SM.render(name, True, col), (px+36, y2))
+            payout_txt = F_XS.render(f"x3 = {pay}x", True, (200, 220, 255))
+            surf.blit(payout_txt, (px+36, y2+18))
 
     def _draw_lever(self, surf):
         bx, by = self._lever_ball_pos()
@@ -1335,12 +1483,11 @@ class SlotsState:
             surf.blit(ht2, ht2.get_rect(centerx=bx, top=by+_LEV_R+6))
 
     def draw(self, surf):
-        surf.fill((8,20,12))
-        # Subtle floor tile
-        for tx in range(0,W,48):
-            for ty in range(70,H,48):
-                if (tx//48+ty//48)%2==0:
-                    pygame.draw.rect(surf,(10,24,14),(tx,ty,48,48))
+        surf.fill(BG)
+        for tx in range(0,W,64):
+            pygame.draw.line(surf, (255,255,255,10), (tx,80), (tx,H), 1)
+        for ty in range(80,H,64):
+            pygame.draw.line(surf, (255,255,255,10), (0,ty), (W,ty), 1)
         top_bar(surf,"SLOT MACHINE",self.player,self.back_btn)
         self._draw_machine_body(surf)
         self._draw_marquee(surf)
@@ -1353,6 +1500,12 @@ class SlotsState:
             self.bet_sel.draw(surf)
             hint = F_SM.render("Click the lever  ──▶  to spin!", True, GRAY)
             surf.blit(hint, hint.get_rect(centerx=_M_CX, top=576))
+            # Auto spin buttons
+            for btn in self.auto_btns:
+                btn.draw(surf)
+            if self.auto_spins > 0:
+                auto_text = F_SM.render(f"Auto spins left: {self.auto_spins}", True, GOLD)
+                surf.blit(auto_text, auto_text.get_rect(centerx=W-190, top=490))
         elif self.state == "spinning":
             s = F_LG.render("Spinning...", True, GOLD)
             surf.blit(s, s.get_rect(centerx=_M_CX, centery=512))
@@ -1360,6 +1513,12 @@ class SlotsState:
             self.bet_sel.draw(surf)
             s = F_SM.render("Pull lever or click to spin again", True, GRAY)
             surf.blit(s, s.get_rect(centerx=_M_CX, top=576))
+            # Auto spin buttons
+            for btn in self.auto_btns:
+                btn.draw(surf)
+            if self.auto_spins > 0:
+                auto_text = F_SM.render(f"Auto spins left: {self.auto_spins}", True, GOLD)
+                surf.blit(auto_text, auto_text.get_rect(centerx=W-190, top=490))
         for p in self._particles:
             p.draw(surf)
         if self._flash_t > 0:
@@ -1572,10 +1731,7 @@ class BlackjackState:
         dk_x, dk_y = W - 88, 80   # just below the top bar on the right
         for di in range(2):
             rx2, ry2 = dk_x + di*3, dk_y + di*3
-            pygame.draw.rect(surf, DKBLUE, (rx2, ry2, 62, 86), border_radius=7)
-            for ii in range(0, 62, 10):          # cross-hatch lines
-                pygame.draw.line(surf, (40,70,130), (rx2+ii, ry2), (rx2+ii, ry2+86), 1)
-            pygame.draw.rect(surf, BLUE,   (rx2, ry2, 62, 86), 2, border_radius=7)
+            draw_card_back(surf, rx2, ry2, 62, 86, SND.card_back)
         surf.blit(F_XS.render("DECK", True, (80,120,200)),
                   F_XS.render("DECK", True, (80,120,200)).get_rect(centerx=dk_x+34, top=dk_y+90))
 
@@ -1697,28 +1853,35 @@ class RouletteState:
     def handle_event(self, event):
         if self.back_btn.clicked(event):
             return "game_over" if self.player.coins <= 0 else "lobby"
-        if self.state in ("pick","pick_num"):
+        if self.state in ("pick","pick_num","bet"):
             for key,btn in self.type_btns:
                 if btn.clicked(event):
-                    self.sel_type=key
-                    self.state="pick_num" if key=="number" else "bet"
-            if self.state=="pick_num":
+                    self.sel_type = key
+                    if key == "number":
+                        self.state = "pick_num"
+                    else:
+                        self.state = "bet"
+                        self.pick_num = 0  # reset if changing away from number
+            if self.state == "pick_num":
                 for n,btn in enumerate(self.num_btns):
                     if btn.clicked(event):
-                        self.pick_num=n; self.state="bet"
-        elif self.state=="bet":
-            self.bet_sel.handle(event)
-            if self.spin_btn.clicked(event):
-                self.bet_locked = self.bet_sel.value   # lock bet NOW
-                self.result     = random.randint(0,36)
-                self.spin_anim  = 0.0
-                self.ball_vis   = True
-                self.state      = "spinning"
-                SND.play("spin")
-        elif self.state=="result":
-            if event.type==pygame.MOUSEBUTTONDOWN:
-                if self.player.coins<=0: return "game_over"
-                self.state="pick"; self.sel_type=None; self.ball_vis=False
+                        self.pick_num = n
+                        self.state = "bet"
+            if self.state == "bet":
+                self.bet_sel.handle(event)
+                if self.spin_btn.clicked(event):
+                    self.bet_locked = self.bet_sel.value   # lock bet NOW
+                    self.result     = random.randint(0,36)
+                    self.spin_anim  = 0.0
+                    self.ball_vis   = True
+                    self.state      = "spinning"
+                    SND.play("spin")
+        elif self.state == "result":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if self.player.coins <= 0: return "game_over"
+                self.state = "pick"
+                self.sel_type = None
+                self.ball_vis = False
         return None
 
     def update(self, dt):
@@ -1991,24 +2154,26 @@ class DiceState:
         bl = rot(cx-cw_bot//2, cy)
         cup_pts = [tl, tr, br, bl]
 
-        # Shadow
-        shd_pts = [(p[0]+4, p[1]+4) for p in cup_pts]
-        shd_s = pygame.Surface((W,H), pygame.SRCALPHA)
-        pygame.draw.polygon(shd_s,(0,0,0,60),shd_pts)
-        surf.blit(shd_s,(0,0))
+        # Shadow - more pronounced
+        shd_pts = [(p[0]+5, p[1]+5) for p in cup_pts]
+        shd_s = pygame.Surface((W, H), pygame.SRCALPHA)
+        pygame.draw.polygon(shd_s, (0, 0, 0, 100), shd_pts)
+        surf.blit(shd_s, (0, 0))
 
-        # Cup body
-        pygame.draw.polygon(surf,(75,80,95),cup_pts)
-        pygame.draw.polygon(surf,(95,102,120),cup_pts,3)
-        # Top rim
-        pygame.draw.line(surf,(130,138,158),tl,tr,5)
-        # Bottom rim band
-        pygame.draw.line(surf,(110,118,138),bl,br,4)
-        # Handle nub
-        handle_top = rot(cx+cw_bot//2+10, cy-12)
-        handle_bot = rot(cx+cw_bot//2+10, cy+8)
-        pygame.draw.line(surf,(110,115,135),br,handle_top,8)
-        pygame.draw.line(surf,(110,115,135),br,handle_bot,8)
+        # Cup body with better colors - leather-like
+        pygame.draw.polygon(surf, (85, 75, 60), cup_pts)
+        pygame.draw.polygon(surf, (110, 95, 70), cup_pts, 4)
+        # Top rim - chrome effect
+        pygame.draw.line(surf, (160, 165, 180), tl, tr, 6)
+        pygame.draw.line(surf, (130, 135, 150), tl, tr, 3)
+        # Bottom rim band - more defined
+        pygame.draw.line(surf, (130, 120, 90), bl, br, 5)
+        # Handle nub - improved
+        handle_top = rot(cx+cw_bot//2+12, cy-12)
+        handle_bot = rot(cx+cw_bot//2+12, cy+8)
+        pygame.draw.line(surf, (130, 120, 100), br, handle_top, 10)
+        pygame.draw.line(surf, (130, 120, 100), br, handle_bot, 10)
+        pygame.draw.line(surf, (160, 150, 120), br, handle_top, 4)
 
     def draw(self, surf):
         draw_felt_bg(surf)
@@ -2224,47 +2389,67 @@ class CoinFlipState:
 
     def _draw_pedestal(self, surf, cx, py):
         """Draw a multi-step stone pedestal centred at cx, top at py."""
-        for i, (w2,h2,col) in enumerate([
-                (100,12,(90,75,55)),(80,10,(110,92,68)),(60,14,(80,65,45))]):
-            pygame.draw.rect(surf,col,(cx-w2//2,py+i*10,w2,h2),border_radius=4)
-            pygame.draw.rect(surf,(min(255,col[0]+30),min(255,col[1]+24),min(255,col[2]+18)),
-                             (cx-w2//2,py+i*10,w2,h2),2,border_radius=4)
+        # Base shadow
+        shadow = pygame.Surface((120, 40), pygame.SRCALPHA)
+        pygame.draw.ellipse(shadow, (0, 0, 0, 80), (0, 0, 120, 40))
+        surf.blit(shadow, (cx-60, py+40))
+        
+        for i, (w2, h2, col) in enumerate([
+                (100, 14, (95, 80, 60)),
+                (80, 12, (115, 95, 70)),
+                (60, 16, (85, 70, 50))]):
+            # Pedestal step with shadow
+            pygame.draw.rect(surf, (60, 50, 30), (cx-w2//2+2, py+i*10+2, w2, h2), border_radius=5)
+            # Main step
+            pygame.draw.rect(surf, col, (cx-w2//2, py+i*10, w2, h2), border_radius=5)
+            # Bright top edge
+            pygame.draw.rect(surf, (min(255, col[0]+40), min(255, col[1]+30), min(255, col[2]+20)),
+                             (cx-w2//2, py+i*10, w2, h2), 3, border_radius=5)
 
     def _draw_coin(self, surf, cx, cy, phase, face):
         """Draw a 3D-looking gold coin. phase 0-1 controls flip squish."""
         squish = abs(math.cos(phase * math.pi * 5))
         if self.state == "result":
             squish = 1.0
-        cw = max(6, int(130*squish)); ch = 130
+        cw = max(8, int(130*squish)); ch = 130
 
-        col_face = GOLD if face=="H" else GOLD2
-        col_edge = GOLD3
-        col_rim  = (min(255,GOLD[0]+20),min(255,GOLD[1]+20),min(255,GOLD[2]+20))
+        col_face = (220, 180, 80) if face=="H" else (200, 160, 60)
+        col_edge = (180, 140, 40)
+        col_rim  = (240, 210, 130)
+        col_dark = (100, 80, 20)
 
-        # Shadow
-        shd = pygame.Surface((cw+20,ch+20),pygame.SRCALPHA)
-        pygame.draw.ellipse(shd,(0,0,0,60),(10,16,cw,ch))
-        surf.blit(shd,(cx-cw//2-6,cy-ch//2+8))
+        # Shadow - more pronounced
+        shd = pygame.Surface((cw+24, ch+24), pygame.SRCALPHA)
+        pygame.draw.ellipse(shd, (0, 0, 0, 120), (12, 18, cw, ch))
+        surf.blit(shd, (cx-cw//2-8, cy-ch//2+10))
 
-        # Coin body
-        r2 = pygame.Rect(cx-cw//2,cy-ch//2,cw,ch)
-        pygame.draw.ellipse(surf,col_face,r2)
-        # Metallic ring
-        pygame.draw.ellipse(surf,col_rim,r2,4)
-        # Inner ring
-        if cw>40:
-            ir2 = r2.inflate(-20,-20)
-            pygame.draw.ellipse(surf,col_edge,ir2,2)
-        # Face letter
-        if cw>50:
-            lbl=F_HUGE.render(face,True,col_edge)
-            surf.blit(lbl,lbl.get_rect(center=(cx,cy)))
-        # Shine
-        if cw>30:
-            sh_r=pygame.Rect(cx-cw//4,cy-ch//3,cw//3,ch//5)
-            sh_s=pygame.Surface((sh_r.w,sh_r.h),pygame.SRCALPHA)
-            pygame.draw.ellipse(sh_s,(255,255,255,55),(0,0,sh_r.w,sh_r.h))
-            surf.blit(sh_s,(sh_r.x,sh_r.y))
+        # Coin body with gradient effect
+        r2 = pygame.Rect(cx-cw//2, cy-ch//2, cw, ch)
+        pygame.draw.ellipse(surf, col_dark, r2)
+        pygame.draw.ellipse(surf, col_face, r2.inflate(-6, -6))
+        # Metallic rim - brighter
+        pygame.draw.ellipse(surf, col_rim, r2, 5)
+        # Inner ring - darker edge
+        if cw > 40:
+            ir2 = r2.inflate(-22, -22)
+            pygame.draw.ellipse(surf, col_edge, ir2, 3)
+        # Face letter - improved visibility
+        if cw > 50:
+            lbl = F_HUGE.render(face, True, col_dark)
+            surf.blit(lbl, lbl.get_rect(center=(cx, cy)))
+        # Shine - multiple highlights for metallic effect
+        if cw > 30:
+            # Main shine
+            sh_r = pygame.Rect(cx-cw//5, cy-ch//3, cw//3, ch//6)
+            sh_s = pygame.Surface((sh_r.w, sh_r.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh_s, (255, 255, 255, 80), (0, 0, sh_r.w, sh_r.h))
+            surf.blit(sh_s, (sh_r.x, sh_r.y))
+            # Secondary shine
+            if cw > 50:
+                sh_r2 = pygame.Rect(cx+cw//8, cy+ch//6, cw//4, ch//8)
+                sh_s2 = pygame.Surface((sh_r2.w, sh_r2.h), pygame.SRCALPHA)
+                pygame.draw.ellipse(sh_s2, (255, 255, 255, 40), (0, 0, sh_r2.w, sh_r2.h))
+                surf.blit(sh_s2, (sh_r2.x, sh_r2.y))
 
     def draw(self, surf):
         draw_felt_bg(surf)
@@ -2350,12 +2535,14 @@ class SettingsState:
     def __init__(self, player):
         self.player   = player
         self.back_btn = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
-        self.test_btn = Btn((W//2-75, 540, 150, 46), "► TEST SOUND",
+        self.test_btn = Btn((W//2-75, 670, 150, 46), "► TEST SOUND",
                             GOLD3, GOLD, tc=BLACK, font=F_MDB)
         mid = W // 2
         # Initialise sliders from current SND values
         self.master_sl = Slider(mid, 290, 560, "Master Volume", SND.master)
         self.sfx_sl    = Slider(mid, 420, 560, "SFX Volume",    SND.sfx)
+        self.card_back_idx = SND.card_back
+        self.card_back_btn = Btn((mid-200, 520, 400, 50), f"Card Back: {CARD_BACK_STYLE_NAMES[SND.card_back]}", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
 
     def handle_event(self, event):
         self.master_sl.handle(event)
@@ -2363,6 +2550,12 @@ class SettingsState:
         # Live update while dragging
         SND.master = self.master_sl.value
         SND.sfx    = self.sfx_sl.value
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            pass  # removed card_back_rects
+        if self.card_back_btn.clicked(event):
+            SND.card_back = (SND.card_back + 1) % len(CARD_BACK_STYLE_NAMES)
+            self.card_back_btn.label = f"Card Back: {CARD_BACK_STYLE_NAMES[SND.card_back]}"
+            SND.play("click")
         if self.test_btn.clicked(event):
             SND.play("win")
         if self.back_btn.clicked(event):
@@ -2395,10 +2588,18 @@ class SettingsState:
         lbl = F_SMB.render(f"Effective volume:  {int(eff*100)} %", True, LGRAY)
         surf.blit(lbl, lbl.get_rect(centerx=W//2, top=bar_y+18))
 
+        # Card back selection
+        mid = W // 2
+        self.card_back_btn.draw(surf)
+        preview_rect = pygame.Rect(mid + 210, 520, 80, 50)
+        pygame.draw.rect(surf, PANELB, preview_rect, border_radius=8)
+        pygame.draw.rect(surf, GOLD3, preview_rect, 2, border_radius=8)
+        draw_card_back(surf, preview_rect.x + 5, preview_rect.y + 5, preview_rect.w - 10, preview_rect.h - 10, SND.card_back)
+
         self.test_btn.draw(surf)
 
         hint = F_SM.render("Drag the sliders, then press  < Back  to save.", True, GRAY)
-        surf.blit(hint, hint.get_rect(centerx=W//2, centery=630))
+        surf.blit(hint, hint.get_rect(centerx=W//2, centery=715))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Game Over
@@ -2553,12 +2754,12 @@ def main():
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                player.save(); pygame.quit(); sys.exit()
+                player.save(); SND.save(); pygame.quit(); sys.exit()
             if trans.busy:
                 continue          # block input while fading
             result = state.handle_event(event)
             if result == "quit":
-                player.save(); pygame.quit(); sys.exit()
+                player.save(); SND.save(); pygame.quit(); sys.exit()
             elif result is not None:
                 if result == "lobby" and player.coins <= 0:
                     trans.start("game_over")
@@ -2577,6 +2778,7 @@ def main():
                 state = make_state(switch, player)
 
         state.update(dt)
+        player.update(dt)
         screen.fill(BG)
         state.draw(screen)
         trans.draw(screen)

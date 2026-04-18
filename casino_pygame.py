@@ -86,6 +86,7 @@ class SoundManager:
         self.ghost_players = True
         self.music_on = True
         self._music_ch = None
+        self._sand_ch  = None
         self._snds  = {}
         try:
             self._build()
@@ -151,6 +152,31 @@ class SoundManager:
                 s(1400,t)*math.exp(-t*90)*0.40
                 + random.uniform(-1,1)*math.exp(-t*100)*0.20
             ) * 0.55, 0.035)
+
+        # Scratch / sand — pink-noise loop, OLA crossfade for seamless repeat
+        _sr2  = 44100
+        _body = int(_sr2 * 1.5)   # 1.5 s body
+        _xlen = int(_sr2 * 0.18)  # 180 ms overlap-add crossfade
+        _total = _body + _xlen
+        # Generate pink noise via simple 3-pole filter (Voss-McCartney approx)
+        _b0 = _b1 = _b2 = 0.0
+        _raw = []
+        for _ in range(_total):
+            _w = random.uniform(-1, 1)
+            _b0 = 0.99886*_b0 + _w*0.0555179
+            _b1 = 0.99332*_b1 + _w*0.0750759
+            _b2 = 0.96900*_b2 + _w*0.1538520
+            _raw.append((_b0 + _b1 + _b2 + _w*0.5362) * 0.11)
+        # OLA: blend tail into head over _xlen samples
+        _sbuf = []
+        for _i in range(_body):
+            _v = _raw[_i]
+            if _i < _xlen:
+                _alpha = _i / _xlen
+                _v = _v * _alpha + _raw[_body + _i] * (1.0 - _alpha)
+            _sbuf.append(max(-32767, min(32767, int(_v * 0.55 * 32767))))
+        self._snds["sand"] = pygame.mixer.Sound(
+            buffer=struct.pack(f"<{_body}h", *_sbuf))
 
         # Small win — C E G C5 arpeggio with chord finish
         _wn = [261.63, 329.63, 392.0, 523.25]
@@ -301,6 +327,22 @@ class SoundManager:
             snd.set_volume(max(0.0, min(1.0, self.master * self.sfx)))
             snd.play()
 
+    def start_sand(self):
+        if self._sand_ch and self._sand_ch.get_busy():
+            return
+        snd = self._snds.get("sand")
+        if snd:
+            snd.set_volume(max(0.0, min(1.0, self.master * self.sfx * 0.7)))
+            self._sand_ch = snd.play(loops=-1)
+
+    def stop_sand(self):
+        if self._sand_ch:
+            try:
+                self._sand_ch.stop()
+            except Exception:
+                pass
+            self._sand_ch = None
+
 # ── Slot symbols ──────────────────────────────────────────────────────────────
 SLOT_DEFS = [
     ("BAR",  (230, 200, 50),  20, 22),
@@ -366,6 +408,14 @@ class Player:
                        "history":[]}
         self.prestige = 0
 
+    @property
+    def prestige_cost(self):
+        return 10_000 + self.prestige * 10_000
+
+    @property
+    def luck(self):
+        return self.prestige * 0.05
+
     def win(self, amount):
         self.coins += amount
         self.stats["won"]   += amount
@@ -390,9 +440,9 @@ class Player:
 
     def update_streak(self, won):
         if won:
-            self.streak = self.streak + 1 if self.streak > 0 else 1
+            self.streak = max(0, self.streak) + 1   # clears any loss streak, adds to win streak
         else:
-            self.streak = self.streak - 1 if self.streak < 0 else -1
+            self.streak = min(0, self.streak) - 1   # clears any win streak, adds to loss streak
 
     def update(self, dt):
         if self.display_coins != self.coins:
@@ -418,8 +468,9 @@ class Player:
                 p = Player(d["name"], d["coins"])
                 p.display_coins = float(d["coins"])
                 p.stats   = {**p.stats, **d.get("stats",{})}
-                p.loan    = d.get("loan", 0)
-                p.streak  = d.get("streak", 0)
+                p.loan     = d.get("loan", 0)
+                raw_streak = d.get("streak", 0)
+                p.streak   = int(raw_streak) if isinstance(raw_streak, (int, float)) else 0
                 p.prestige = d.get("prestige", 0)
                 return p
             except: pass
@@ -1417,7 +1468,7 @@ class LobbyState:
 
         bot  = H - 46
         gap  = 8
-        ws   = [108, 108, 150, 140, 116, 88]   # per-button widths
+        ws   = [100, 100, 138, 130, 106, 72, 72]   # per-button widths
         totw = sum(ws) + (len(ws)-1)*gap
         bx   = (W - totw) // 2
         xs   = []
@@ -1436,7 +1487,9 @@ class LobbyState:
                                 DKRED,  RED,   tc=WHITE, border=RED,  font=F_SMB)
         self.repay_btn    = Btn((xs[4], bot, ws[4], 38), "REPAY LOAN",
                                 (10,60,25), WINC, tc=WINC, border=WINC, font=F_SMB)
-        self.quit_btn     = Btn((xs[5], bot, ws[5], 38), "EXIT",
+        self.info_btn     = Btn((xs[5], bot, ws[5], 38), "INFO",
+                                PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SMB)
+        self.quit_btn     = Btn((xs[6], bot, ws[6], 38), "EXIT",
                                 DKRED,  RED,  tc=WHITE, border=RED,  font=F_SMB)
 
         # Page navigation arrows (centred vertically in cabinet area)
@@ -1445,7 +1498,7 @@ class LobbyState:
         self.arr_right = Btn((W-66, mid_y, 48, 48), "►", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_MDB)
 
         # Prestige button
-        self.prestige_btn = Btn((W//2-90, 88, 180, 32), "PRESTIGE ★",
+        self.prestige_btn = Btn((10, 84, 164, 34), "PRESTIGE  P",
                                 (60,40,0), (255,200,0), tc=(255,200,0), border=(200,160,0), font=F_SMB)
 
         # Ghost players data
@@ -1477,6 +1530,7 @@ class LobbyState:
         if self.stats_btn.clicked(event):    return "stats"
         if self.ach_btn.clicked(event):      return "achievements"
         if self.lb_btn.clicked(event):       return "leaderboard"
+        if self.info_btn.clicked(event):     return "info"
         if self.quit_btn.clicked(event):     return "quit"
         if self.player.loan == 0:
             if self.loan_btn.clicked(event): return "loanshark"
@@ -1493,7 +1547,7 @@ class LobbyState:
         if self.lobby_page == 1 and self.arr_left.clicked(event):
             self.lobby_page = 0
         # Prestige button
-        if self.player.coins >= PRESTIGE_THRESHOLD and self.prestige_btn.clicked(event):
+        if self.player.coins >= self.player.prestige_cost and self.prestige_btn.clicked(event):
             self.player.coins = STARTING_COINS + self.player.prestige * PRESTIGE_BONUS
             self.player.prestige += 1
             self.player.record_history()
@@ -1524,7 +1578,7 @@ class LobbyState:
         # Player name + prestige badge
         name_str = self.player.name
         if self.player.prestige > 0:
-            name_str += f"  ★×{self.player.prestige}"
+            name_str += f"  P×{self.player.prestige}"
         if self.player.loan > 0:
             bal_str = (f"{name_str}   |   Balance: {display_balance:,} c"
                        f"   |   DEBT: {self.player.loan:,} c")
@@ -1535,7 +1589,7 @@ class LobbyState:
         surf.blit(bal, bal.get_rect(centerx=W//2, centery=96))
 
         # Prestige button (top area, only if threshold reached)
-        if self.player.coins >= PRESTIGE_THRESHOLD:
+        if self.player.coins >= self.player.prestige_cost:
             self.prestige_btn.draw(surf)
 
         pygame.draw.rect(surf, (4,12,8), (0,H-56,W,56))
@@ -1549,6 +1603,7 @@ class LobbyState:
             self.repay_btn.draw(surf)
         else:
             self.loan_btn.draw(surf)
+        self.info_btn.draw(surf)
         self.quit_btn.draw(surf)
 
         # Page indicator
@@ -1569,28 +1624,26 @@ class LobbyState:
                 draw_cabinet(surf, rect.x, rect.y, key, name, desc, hovered, self.player.coins >= 10)
             self.arr_left.draw(surf)
 
-        # Ghost players panel
+        # Ghost players panel — top-right corner inside header bar
         if SND.ghost_players and self._ghosts:
-            px = W - 190
-            py = 130
-            pw, ph2 = 180, 220
+            pw, ph2 = 186, 118
+            px = W - pw - 4
+            py = 4
             ghost_surf = pygame.Surface((pw, ph2), pygame.SRCALPHA)
-            pygame.draw.rect(ghost_surf, (10, 20, 35, 210), (0, 0, pw, ph2), border_radius=10)
-            pygame.draw.rect(ghost_surf, (*GOLD2, 120), (0, 0, pw, ph2), 1, border_radius=10)
+            pygame.draw.rect(ghost_surf, (10, 20, 35, 210), (0, 0, pw, ph2), border_radius=8)
+            pygame.draw.rect(ghost_surf, (*GOLD2, 120), (0, 0, pw, ph2), 1, border_radius=8)
             surf.blit(ghost_surf, (px, py))
-            hdr_l = F_SMB.render("ONLINE", True, GOLD)
-            surf.blit(hdr_l, hdr_l.get_rect(centerx=px+pw//2, top=py+6))
-            pygame.draw.line(surf, GOLD3, (px+8, py+24), (px+pw-8, py+24), 1)
-            for gi, g in enumerate(self._ghosts[:4]):
-                gy = py + 30 + gi * 46
+            hdr_l = F_XS.render("ONLINE", True, GOLD)
+            surf.blit(hdr_l, hdr_l.get_rect(centerx=px+pw//2, top=py+5))
+            pygame.draw.line(surf, GOLD3, (px+6, py+20), (px+pw-6, py+20), 1)
+            for gi, g in enumerate(self._ghosts[:3]):
+                gy = py + 24 + gi * 30
                 dot_c = WINC if "Won" in g["action"] else (LOSEC if "Lost" in g["action"] else GOLD2)
-                pygame.draw.circle(surf, dot_c, (px+10, gy+8), 4)
-                nm_l = F_XS.render(g["name"][:12], True, WHITE)
-                surf.blit(nm_l, (px+18, gy))
-                act_l = F_XS.render(g["action"][:14], True, dot_c)
-                surf.blit(act_l, (px+18, gy+14))
-                gm_l = F_XS.render(g["game"][:12], True, GRAY)
-                surf.blit(gm_l, (px+18, gy+26))
+                pygame.draw.circle(surf, dot_c, (px+9, gy+7), 3)
+                nm_l = F_XS.render(g["name"][:13], True, WHITE)
+                surf.blit(nm_l, (px+16, gy))
+                act_l = F_XS.render(g["action"][:15], True, dot_c)
+                surf.blit(act_l, (px+16, gy+14))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Slot Machine  — cabinet body + animated lever
@@ -1658,7 +1711,7 @@ class SlotsState:
                 if btn.clicked(event):
                     spins = [5, 10, 25][i]
                     if self.player.coins >= self.bet_sel.value * spins:
-                        self.auto_spins = spins
+                        self.auto_spins = spins - 1
                         self._do_spin()
                     break
 
@@ -1695,7 +1748,11 @@ class SlotsState:
     def _do_spin(self):
         self._bet_placed = self.bet_sel.value
         self.result      = random.choices(S_NAMES, weights=S_WEIGHTS, k=3)
-        now              = pygame.time.get_ticks()
+        # Luck: prestige gives 5% per level chance to upgrade a no-match to two-match
+        if self.player.luck > 0 and len(set(self.result)) == 3:
+            if random.random() < self.player.luck:
+                self.result[2] = self.result[0]
+        now = pygame.time.get_ticks()
         for i, reel in enumerate(self.reels):
             reel.spin(self.result[i], now+1500+i*600)
         self.state = "spinning"
@@ -1782,6 +1839,7 @@ class SlotsState:
             if self.player.coins >= self.bet_sel.value:
                 self.auto_spins -= 1
                 self._do_spin()
+                return  # _do_spin already sets state to "spinning"
             else:
                 self.auto_spins = 0
         self.state = "result"
@@ -3770,7 +3828,7 @@ class ScratchState:
     def __init__(self, player):
         self.player    = player
         self.back_btn  = Btn((20,18,90,36),"< Back",PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SM)
-        self.buy_btn   = Btn((W//2-120,570,240,46),"BUY SCRATCH CARD — 50c",
+        self.buy_btn   = Btn((W//2-140,570,280,46),"BUY CARD  (50c)",
                              GOLD3,GOLD,tc=BLACK,font=F_MDB)
         self.reveal_btn= Btn((W//2-80,570,160,40),"REVEAL ALL",
                              PANELB,GOLD2,tc=GOLD,border=GOLD2,font=F_SMB)
@@ -3779,6 +3837,10 @@ class ScratchState:
         self.grid      = []      # list of 9 symbols
         self.revealed  = []     # list of 9 bools
         self.reveal_t  = []     # animation timers
+        self._scratch_surfs = []  # per-cell silver coating surfaces
+        self._scratching    = False  # mouse button held down
+        self._last_scratch  = None  # last mouse pos while scratching
+        self._sand_move_t   = 0.0   # countdown; >0 means mouse is actively moving
 
     def _grid_cell_rect(self, i):
         total_w = self.COLS * self.CELL_W + (self.COLS-1) * 10
@@ -3794,8 +3856,6 @@ class ScratchState:
         if self.player.coins < self.COST:
             return
         self.player.coins -= self.COST
-        self.player.stats["games"] = self.player.stats.get("games", 0) + 1
-        # Generate grid: place 3 of one symbol, fill rest with others
         win_sym = random.choice(SCRATCH_SYMBOLS)
         positions = random.sample(range(9), 3)
         self.grid = [random.choice([s for s in SCRATCH_SYMBOLS if s != win_sym]) for _ in range(9)]
@@ -3804,6 +3864,20 @@ class ScratchState:
         random.shuffle(self.grid)
         self.revealed = [False] * 9
         self.reveal_t = [0.0] * 9
+        # Build per-cell scratch surfaces (opaque silver coating with holes punched out)
+        self._scratch_surfs  = []
+        # Area tracker: 12×8 tile grid per cell (96 tiles); reveal at 79% ≈ 76 tiles
+        self._TILE = 10
+        self._TCOLS = self.CELL_W  // self._TILE   # 12
+        self._TROWS = self.CELL_H  // self._TILE   # 8
+        self._TTOTAL = self._TCOLS * self._TROWS   # 96
+        self._scratch_tiles = [set() for _ in range(9)]
+        for _ in range(9):
+            s = pygame.Surface((self.CELL_W, self.CELL_H), pygame.SRCALPHA)
+            s.fill((170, 180, 190, 255))
+            self._scratch_surfs.append(s)
+        self._scratching   = False
+        self._last_scratch = None
         self.state = "scratching"
 
     def _check_win(self):
@@ -3819,6 +3893,32 @@ class ScratchState:
                 return syms[0]
         return None
 
+    def _do_scratch(self, mx, my):
+        """Erase silver coating; reveal cell when 79% of tile-grid is covered."""
+        radius = 18
+        for i in range(9):
+            if self.revealed[i]:
+                continue
+            rect = self._grid_cell_rect(i)
+            lx, ly = mx - rect.x, my - rect.y
+            if not (-radius < lx < self.CELL_W + radius and
+                    -radius < ly < self.CELL_H + radius):
+                continue
+            pygame.draw.circle(self._scratch_surfs[i], (0, 0, 0, 0), (lx, ly), radius)
+            # Mark covered tiles
+            r2 = radius * radius
+            tc, tr = self._TCOLS, self._TROWS
+            t = self._TILE
+            for row in range(tr):
+                for col in range(tc):
+                    cx2 = col * t + t // 2
+                    cy2 = row * t + t // 2
+                    if (cx2 - lx) ** 2 + (cy2 - ly) ** 2 <= r2:
+                        self._scratch_tiles[i].add((row, col))
+            if len(self._scratch_tiles[i]) / self._TTOTAL >= 0.79:
+                self.revealed[i] = True
+                self.reveal_t[i] = 0.0
+
     def handle_event(self, event):
         if self.back_btn.clicked(event):
             return "game_over" if self.player.coins <= 0 else "lobby"
@@ -3827,45 +3927,78 @@ class ScratchState:
                 self._buy_card()
         elif self.state == "scratching":
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                for i in range(9):
-                    if not self.revealed[i] and self._grid_cell_rect(i).collidepoint(event.pos):
-                        self.revealed[i] = True
-                        self.reveal_t[i] = 0.0
-                        SND.play("coin")
-                # Auto-check if all revealed
+                self._scratching = True
+                self._last_scratch = event.pos
+                self._do_scratch(*event.pos)
+                if all(self.revealed):
+                    self._resolve()
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self._scratching = False
+                self._last_scratch = None
+                self._sand_move_t = 0.0
+                SND.stop_sand()
+            elif event.type == pygame.MOUSEMOTION and self._scratching:
+                # Interpolate between last and current pos for smooth strokes
+                if self._last_scratch:
+                    x0, y0 = self._last_scratch
+                    x1, y1 = event.pos
+                    dist = math.hypot(x1-x0, y1-y0)
+                    if dist > 1:
+                        self._sand_move_t = 0.08  # keep sound alive 80 ms after last motion
+                        SND.start_sand()
+                        steps = max(1, int(dist / 8))
+                        for s in range(steps + 1):
+                            ix = int(x0 + (x1-x0) * s / steps)
+                            iy = int(y0 + (y1-y0) * s / steps)
+                            self._do_scratch(ix, iy)
+                self._last_scratch = event.pos
                 if all(self.revealed):
                     self._resolve()
             if self.reveal_btn.clicked(event):
+                SND.stop_sand()
                 for i in range(9):
                     self.revealed[i] = True
                 self._resolve()
         elif self.state == "done":
             if event.type == pygame.MOUSEBUTTONDOWN:
+                SND.stop_sand()
                 self.state = "idle"
+                self._scratching    = False
+                self._scratch_tiles = []
         return None
 
     def _resolve(self):
         win_sym = self._check_win()
+        cb = self.player.coins
         if win_sym:
             prize = SCRATCH_PRIZE.get(win_sym, 0) * self.COST
             self.player.win(prize)
+            self.player.update_streak(True)
             self.msg.show(f"MATCH {win_sym}×3!  +{prize:,} c", WINC, 3.0)
             SND.play("jackpot")
             spawn_coins(W//2, 380, 30)
-            _check_ach(self.player, gain=prize, bet=self.COST, coins_before=self.player.coins-prize)
+            _check_ach(self.player, gain=prize, bet=self.COST, coins_before=cb)
         else:
+            self.player.stats["lost"]  = self.player.stats.get("lost", 0) + self.COST
+            self.player.stats["games"] = self.player.stats.get("games", 0) + 1
+            self.player.update_streak(False)
             self.msg.show("No match — better luck next time!", LOSEC)
             SND.play("lose")
-            _check_ach(self.player, bet=self.COST, coins_before=self.player.coins)
+            _check_ach(self.player, bet=self.COST, coins_before=cb)
         self.player.record_history()
         self.player.save()
         self.state = "done"
 
     def update(self, dt):
         self.msg.update(dt)
-        for i in range(9):
-            if self.revealed[i] and self.reveal_t[i] < 1.0:
-                self.reveal_t[i] = min(1.0, self.reveal_t[i] + dt * 6)
+        if self.state != "idle":
+            for i in range(9):
+                if self.revealed[i] and self.reveal_t[i] < 1.0:
+                    self.reveal_t[i] = min(1.0, self.reveal_t[i] + dt * 6)
+        if self._sand_move_t > 0:
+            self._sand_move_t -= dt
+            if self._sand_move_t <= 0:
+                SND.stop_sand()
 
     def draw(self, surf):
         draw_felt_bg(surf)
@@ -3889,28 +4022,23 @@ class ScratchState:
             # Draw grid
             for i in range(9):
                 rect = self._grid_cell_rect(i)
+                # Always draw symbol beneath
+                pygame.draw.rect(surf, (20, 48, 28), rect, border_radius=10)
+                pygame.draw.rect(surf, GOLD2, rect, 2, border_radius=10)
+                sym = self.grid[i]
+                sym_col = GOLD if sym in ("BAR","7") else WINC if sym == "★" else BLUE if sym == "♦" else RED if sym == "♥" else (100,220,100)
+                sl = F_LG.render(sym, True, sym_col)
                 if self.revealed[i]:
-                    # Fade in reveal
-                    t = self.reveal_t[i]
-                    alpha = int(255 * t)
-                    # Background
-                    pygame.draw.rect(surf, (20, 48, 28), rect, border_radius=10)
-                    pygame.draw.rect(surf, GOLD2, rect, 2, border_radius=10)
-                    # Symbol
-                    sym = self.grid[i]
-                    sym_col = GOLD if sym in ("BAR","7") else WINC if sym == "★" else BLUE if sym == "♦" else RED if sym == "♥" else (100,220,100)
-                    sl = F_LG.render(sym, True, sym_col)
+                    alpha = int(255 * self.reveal_t[i])
                     sl.set_alpha(alpha)
                     surf.blit(sl, sl.get_rect(center=rect.center))
                 else:
-                    # Covered cell
-                    pygame.draw.rect(surf, (55, 65, 80), rect, border_radius=10)
+                    # Draw silver coating with scratched holes
+                    surf.blit(self._scratch_surfs[i], rect.topleft)
                     pygame.draw.rect(surf, GOLD3, rect, 2, border_radius=10)
-                    ql = F_MDB.render("?", True, GRAY)
-                    surf.blit(ql, ql.get_rect(center=rect.center))
 
             if self.state == "scratching":
-                hint = F_SM.render("Click cells to reveal  or  REVEAL ALL", True, GRAY)
+                hint = F_SM.render("Scratch cells to reveal  or  REVEAL ALL", True, GRAY)
                 surf.blit(hint, hint.get_rect(centerx=cx, centery=560))
                 self.reveal_btn.draw(surf)
             elif self.state == "done":
@@ -3980,6 +4108,155 @@ class Transition:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Info / Rules screen
+# ─────────────────────────────────────────────────────────────────────────────
+_INFO_PAGES = [
+    # Page 0 — Prestige system
+    ("PRESTIGE SYSTEM", [
+        ("What is Prestige?",
+         "When your balance reaches the prestige target you can reset\n"
+         "and start over with a permanent bonus. Each prestige level\n"
+         "grants real gameplay advantages that carry across all games."),
+        ("Cost",
+         "Prestige 1:  10,000 c     Prestige 2:  20,000 c\n"
+         "Prestige 3:  30,000 c     Prestige N:  N × 10,000 c\n"
+         "The cost rises by 10,000 coins for every level."),
+        ("Benefits per level",
+         "+500 starting coins on each future reset.\n"
+         "+5% luck — in Slots a no-match result has a 5% chance\n"
+         "   per prestige level of being upgraded to a two-match push.\n"
+         "Badge 'P×N' displayed next to your name."),
+    ]),
+    # Page 1 — Slots, Blackjack, Roulette
+    ("SLOTS  ·  BLACKJACK  ·  ROULETTE", [
+        ("Slot Machine",
+         "Pull the lever to spin three reels.  Payouts:\n"
+         "  3× BAR = 20×  |  3× 7 = 50×  |  3× Star = 12×\n"
+         "  3× Dia = 8×   |  3× Hrt = 6×  |  3× Club = 4×\n"
+         "  3× WILD = 100×  |  2 matching = push (bet returned)."),
+        ("Blackjack",
+         "Beat the dealer to 21 without going bust.\n"
+         "Blackjack (A + 10-value) pays 3:2.  Dealer stands on 17.\n"
+         "Split pairs, Double down, or Surrender are available."),
+        ("Roulette",
+         "Bet on a number (35:1), color (1:1), odd/even (1:1),\n"
+         "high/low (1:1), or dozens (2:1).  The ball lands randomly\n"
+         "on one of 37 pockets (0–36).  0 is green and beats most bets."),
+    ]),
+    # Page 2 — Dice, Hi-Lo, Coin Flip
+    ("DICE  ·  HI-LO  ·  COIN FLIP", [
+        ("Dice Duel",
+         "Two dice are rolled.  Pick a category before rolling:\n"
+         "  High (8-12) or Low (2-6) pays 1:1\n"
+         "  Lucky 7 pays 4:1  |  Doubles pays 5:1\n"
+         "  Eleven pays 6:1   |  Snake Eyes (1+1) pays 10:1"),
+        ("Hi-Lo",
+         "A card is drawn.  Guess whether the next card will be\n"
+         "Higher or Lower.  Correct guess pays 1:1.\n"
+         "Equal cards count as a push — your bet is returned."),
+        ("Coin Flip",
+         "Flip a coin and call Heads or Tails.\n"
+         "Correct guess doubles your bet (pays 1:1).\n"
+         "The simplest game — 50/50 every time."),
+    ]),
+    # Page 3 — Poker, Baccarat, Scratch
+    ("POKER  ·  BACCARAT  ·  SCRATCH CARD", [
+        ("5-Card Draw Poker",
+         "You and the dealer each get 5 cards.  Discard up to 3\n"
+         "and draw replacements.  Higher poker hand wins.\n"
+         "Hands: High Card → Pair → Two Pair → Three of a Kind\n"
+         "→ Straight → Flush → Full House → Four of a Kind → Straight Flush"),
+        ("Baccarat",
+         "Bet on Player, Banker, or Tie before cards are dealt.\n"
+         "Closest to 9 wins (tens and face cards = 0).\n"
+         "Player pays 1:1  |  Banker pays 0.95:1  |  Tie pays 8:1"),
+        ("Scratch Card",
+         "Buy a card for 50 c.  Scratch cells by holding and\n"
+         "dragging.  Match 3 identical symbols in a row, column,\n"
+         "or diagonal to win.  Prizes: BAR=50× · 7=30× · ★=20×\n"
+         "♦=10× · ♥=5× · ♣=2×  (multiplied by 50 c cost)."),
+    ]),
+]
+
+
+class InfoState:
+    def __init__(self, player):
+        self.player   = player
+        self.page     = 0
+        self.back_btn = Btn((20, 18, 90, 36), "< Back", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SM)
+        self.prev_btn = Btn((W//2-150, H-58, 130, 40), "◄ PREV", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SMB)
+        self.next_btn = Btn((W//2+20,  H-58, 130, 40), "NEXT ►", PANELB, GOLD2, tc=GOLD, border=GOLD2, font=F_SMB)
+
+    def handle_event(self, event):
+        if self.back_btn.clicked(event):
+            return "lobby"
+        if self.prev_btn.clicked(event) and self.page > 0:
+            self.page -= 1
+        if self.next_btn.clicked(event) and self.page < len(_INFO_PAGES) - 1:
+            self.page += 1
+        return None
+
+    def update(self, dt):
+        pass
+
+    def draw(self, surf):
+        draw_felt_bg(surf)
+        top_bar(surf, "GAME INFO & RULES", self.player, self.back_btn)
+
+        title, sections = _INFO_PAGES[self.page]
+        cx = W // 2
+
+        # Page title
+        tl = F_LG.render(title, True, GOLD)
+        surf.blit(tl, tl.get_rect(centerx=cx, top=90))
+
+        # Three sections laid out in columns or stacked
+        col_w = W // 3 - 30
+        for si, (heading, body) in enumerate(sections):
+            sx = 30 + si * (W // 3)
+            sy = 148
+            # Section box
+            box = pygame.Rect(sx, sy, col_w, H - 220)
+            panel(surf, box, PANELB, GOLD3, 1)
+
+            # Heading
+            hl = F_MDB.render(heading, True, GOLD2)
+            surf.blit(hl, hl.get_rect(centerx=sx + col_w//2, top=sy + 10))
+            pygame.draw.line(surf, GOLD3, (sx+12, sy+36), (sx+col_w-12, sy+36), 1)
+
+            # Body text — word-wrap manually
+            y = sy + 46
+            for line in body.split("\n"):
+                line = line.strip()
+                words = line.split(" ") if line else [""]
+                current = ""
+                for word in words:
+                    test = (current + " " + word).strip()
+                    tw = F_SM.size(test)[0]
+                    if tw > col_w - 20 and current:
+                        lbl = F_SM.render(current, True, CREAM)
+                        surf.blit(lbl, (sx + 10, y))
+                        y += 19
+                        current = word
+                    else:
+                        current = test
+                if current:
+                    lbl = F_SM.render(current, True, CREAM)
+                    surf.blit(lbl, (sx + 10, y))
+                    y += 19
+                y += 4  # extra gap between original lines
+
+        self.prev_btn.on = self.page > 0
+        self.next_btn.on = self.page < len(_INFO_PAGES) - 1
+        self.prev_btn.draw(surf)
+        self.next_btn.draw(surf)
+
+        # Page indicator above the nav buttons
+        pg = F_SMB.render(f"Page {self.page+1} / {len(_INFO_PAGES)}", True, GRAY)
+        surf.blit(pg, pg.get_rect(centerx=cx, centery=H-72))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # State factory
 # ─────────────────────────────────────────────────────────────────────────────
 def make_state(name, player):
@@ -4000,6 +4277,7 @@ def make_state(name, player):
         "loanshark":    lambda: LoanSharkState(player),
         "leaderboard":  lambda: LeaderboardState(player),
         "achievements": lambda: AchievementsState(player),
+        "info":         lambda: InfoState(player),
     }[name]()
 
 # ─────────────────────────────────────────────────────────────────────────────
